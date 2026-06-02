@@ -92,10 +92,23 @@ FULL_CONFIG = {
     "scale": 0.5,
 }
 
+SANITY_CONFIG = {
+    "mode": "sanity",
+    "base_model": "yolov8s-seg.pt",
+    "epochs": 5,
+    "batch": 16,
+    "imgsz": 640,
+    "patience": 10,
+    "project": "runs/sanity",
+    "name": "exp",
+    "workers": 8,
+}
+
 
 def get_config(mode: str | None = None) -> dict:
     """Return training config for the given mode."""
     m = mode or MODE
-    if m not in {"smoke", "full"}:
-        raise ValueError(f"Invalid mode: {m}. Must be 'smoke' or 'full'.")
-    return SMOKE_CONFIG if m == "smoke" else FULL_CONFIG
+    configs = {"smoke": SMOKE_CONFIG, "sanity": SANITY_CONFIG, "full": FULL_CONFIG}
+    if m not in configs:
+        raise ValueError(f"Invalid mode: {m}. Must be one of {set(configs.keys())}.")
+    return configs[m]

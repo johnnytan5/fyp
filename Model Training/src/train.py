@@ -16,7 +16,7 @@ from config import get_config, MODE, DATA_YAML
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", default=MODE, choices=["smoke", "full"])
+    parser.add_argument("--mode", default=MODE, choices=["smoke", "sanity", "full"])
     args = parser.parse_args()
 
     print(f"[train] mode={args.mode}")
