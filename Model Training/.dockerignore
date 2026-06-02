@@ -1,0 +1,8 @@
+data/raw/
+runs/
+.git/
+__pycache__/
+*.pyc
+.DS_Store
+docs/
+tests/

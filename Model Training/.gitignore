@@ -1,0 +1,22 @@
+# datasets and model artifacts
+data/raw/
+data/yolo/images/
+data/yolo/labels/
+data/yolo/labels_raw/
+data/yolo/_qc/
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Kaggle credentials
+kaggle.json

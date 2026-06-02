@@ -1,0 +1,8 @@
+# Path is overridden at runtime via absolute mount; keep relative for local use
+path: data/yolo
+train: images/train
+val: images/val
+test: images/test
+nc: 1
+names:
+  0: crack

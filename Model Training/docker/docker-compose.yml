@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  crack-seg-local:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.local
+    image: crack-seg:local
+    volumes:
+      - ../data:/workspace/data
+      - ../runs:/workspace/runs
+    platform: linux/arm64
