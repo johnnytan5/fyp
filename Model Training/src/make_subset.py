@@ -32,15 +32,18 @@ def stratified_sample(
     return sampled
 
 
-def copy_split(pairs: list[tuple[Path, Path]], img_out: Path, lbl_out: Path) -> None:
+def copy_split(pairs: list[tuple[Path, Path]], img_out: Path, lbl_out: Path, name: str) -> None:
     img_out.mkdir(parents=True, exist_ok=True)
     lbl_out.mkdir(parents=True, exist_ok=True)
-    for img, lbl in pairs:
+    total = len(pairs)
+    for i, (img, lbl) in enumerate(pairs):
         shutil.copy2(img, img_out / img.name)
         if lbl.exists():
             shutil.copy2(lbl, lbl_out / lbl.name)
         else:
             (lbl_out / lbl.name).write_text("")
+        if (i + 1) % 2000 == 0:
+            print(f"  {name} copied {i+1}/{total}")
 
 
 def main() -> None:
@@ -93,6 +96,7 @@ def main() -> None:
             split_pairs,
             args.out_dir / "images" / split_name,
             args.out_dir / "labels" / split_name,
+            split_name,
         )
         print(f"{split_name}: {len(split_pairs)} images")
 
