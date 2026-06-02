@@ -44,7 +44,9 @@ full-subset:
 	python src/make_subset.py --all \
 		--sources \
 		"data/raw/crackseg9k/images:data/yolo/labels_raw/crackseg9k" \
-		"data/raw/omnicrack30k/images/training:data/yolo/labels_raw/omnicrack30k/training"
+		"data/raw/omnicrack30k/images/training:data/yolo/labels_raw/omnicrack30k/training" \
+		"data/raw/omnicrack30k/images/validation:data/yolo/labels_raw/omnicrack30k/validation" \
+		"data/raw/omnicrack30k/images/test:data/yolo/labels_raw/omnicrack30k/test"
 
 eval-conversion:
 	python src/eval_mask_conversion.py \
