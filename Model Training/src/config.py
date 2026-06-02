@@ -76,10 +76,10 @@ SMOKE_CONFIG = {
 FULL_CONFIG = {
     "mode": "full",
     "base_model": "yolov8s-seg.pt",
-    "epochs": 200,
+    "epochs": 150,
     "batch": 16,
     "imgsz": 640,
-    "patience": 50,
+    "patience": 30,
     "optimizer": "SGD",
     "project": "runs/full",
     "name": "exp",

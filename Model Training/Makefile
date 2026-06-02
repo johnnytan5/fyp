@@ -35,7 +35,13 @@ clean-data:
 		--report data/cleaning_report.csv
 
 subset:
-	@python src/make_subset.py \
+	python src/make_subset.py \
+		--sources \
+		"data/raw/crackseg9k/images:data/yolo/labels_raw/crackseg9k" \
+		"data/raw/omnicrack30k/images/training:data/yolo/labels_raw/omnicrack30k/training"
+
+full-subset:
+	python src/make_subset.py --all \
 		--sources \
 		"data/raw/crackseg9k/images:data/yolo/labels_raw/crackseg9k" \
 		"data/raw/omnicrack30k/images/training:data/yolo/labels_raw/omnicrack30k/training"

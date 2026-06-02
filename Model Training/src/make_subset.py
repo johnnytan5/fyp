@@ -49,6 +49,7 @@ def main() -> None:
                         help="Pairs of IMAGE_DIR:LABEL_DIR, e.g. dir1/imgs:dir1/lbls dir2/imgs:dir2/lbls")
     parser.add_argument("--out-dir", default="data/yolo", type=Path)
     parser.add_argument("--n", default=SUBSET_SIZE, type=int)
+    parser.add_argument("--all", action="store_true", help="Use all images (no sampling)")
     parser.add_argument("--seed", default=RANDOM_SEED, type=int)
     args = parser.parse_args()
 
@@ -68,7 +69,14 @@ def main() -> None:
         print("ERROR: no sources found. Run 'make convert' first.")
         return
 
-    pairs = stratified_sample(sources, args.n, args.seed)
+    if args.all:
+        # Use all images — collect every pair
+        pairs = []
+        for img_dir, lbl_dir in sources:
+            for img in sorted(img_dir.glob("*.jpg")) + sorted(img_dir.glob("*.png")):
+                pairs.append((img, lbl_dir / f"{img.stem}.txt"))
+    else:
+        pairs = stratified_sample(sources, args.n, args.seed)
 
     random.seed(args.seed + 1)
     random.shuffle(pairs)
