@@ -1,4 +1,4 @@
-.PHONY: smoke full build-local build-runpod download convert clean-data subset eval-conversion test
+.PHONY: smoke full full-resume build-local build-runpod download convert clean-data subset eval-conversion test
 
 MODE ?= smoke
 
@@ -13,6 +13,13 @@ full: build-runpod
 		-v $(PWD)/data:/workspace/data \
 		-v $(PWD)/runs:/workspace/runs \
 		crack-seg:runpod python src/train.py --mode full
+
+# Resume an interrupted full run from runs/full/exp/weights/last.pt
+full-resume: build-runpod
+	docker run --gpus all --rm \
+		-v $(PWD)/data:/workspace/data \
+		-v $(PWD)/runs:/workspace/runs \
+		crack-seg:runpod python src/train.py --mode full --resume
 
 # --- Docker build ---
 build-local:
@@ -40,13 +47,15 @@ subset:
 		"data/raw/crackseg9k/images:data/yolo/labels_raw/crackseg9k" \
 		"data/raw/omnicrack30k/images/training:data/yolo/labels_raw/omnicrack30k/training"
 
+# Respect OmniCrack30k's official splits; CrackSeg9k (auto) is ratio-split and
+# merged into each split. Avoids near-duplicate leakage across train/val.
 full-subset:
-	python src/make_subset.py --all \
+	python src/make_subset.py --all --link \
 		--sources \
-		"data/raw/crackseg9k/images:data/yolo/labels_raw/crackseg9k" \
-		"data/raw/omnicrack30k/images/training:data/yolo/labels_raw/omnicrack30k/training" \
-		"data/raw/omnicrack30k/images/validation:data/yolo/labels_raw/omnicrack30k/validation" \
-		"data/raw/omnicrack30k/images/test:data/yolo/labels_raw/omnicrack30k/test"
+		"data/raw/crackseg9k/images:data/yolo/labels_raw/crackseg9k:auto" \
+		"data/raw/omnicrack30k/images/training:data/yolo/labels_raw/omnicrack30k/training:train" \
+		"data/raw/omnicrack30k/images/validation:data/yolo/labels_raw/omnicrack30k/validation:val" \
+		"data/raw/omnicrack30k/images/test:data/yolo/labels_raw/omnicrack30k/test:test"
 
 eval-conversion:
 	python src/eval_mask_conversion.py \

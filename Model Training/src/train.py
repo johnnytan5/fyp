@@ -17,31 +17,47 @@ from config import get_config, MODE, DATA_YAML
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", default=MODE, choices=["smoke", "sanity", "full"])
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume from last.pt in the run dir (e.g. after a pod dies). "
+             "Ignores config args — uses the checkpoint's saved args/epoch.",
+    )
     args = parser.parse_args()
 
-    print(f"[train] mode={args.mode}")
+    print(f"[train] mode={args.mode} resume={args.resume}")
     cfg = get_config(args.mode)
 
-    model = YOLO(cfg["base_model"])
+    last_weights = Path(cfg["project"]) / cfg["name"] / "weights" / "last.pt"
 
-    train_args: dict = {
-        "data": str(DATA_YAML),
-        "epochs": cfg["epochs"],
-        "batch": cfg["batch"],
-        "imgsz": cfg["imgsz"],
-        "patience": cfg["patience"],
-        "project": cfg["project"],
-        "name": cfg["name"],
-        "exist_ok": True,
-        "workers": cfg.get("workers", 4),
-    }
-    if "optimizer" in cfg:
-        train_args["optimizer"] = cfg["optimizer"]
-    for aug_key in ("mosaic", "fliplr", "hsv_h", "hsv_s", "hsv_v", "scale"):
-        if aug_key in cfg:
-            train_args[aug_key] = cfg[aug_key]
+    if args.resume:
+        if not last_weights.exists():
+            raise FileNotFoundError(
+                f"--resume given but no checkpoint at {last_weights}. "
+                f"Run without --resume to start fresh."
+            )
+        print(f"[train] resuming from {last_weights}")
+        model = YOLO(str(last_weights))
+        model.train(resume=True)
+    else:
+        model = YOLO(cfg["base_model"])
+        train_args: dict = {
+            "data": str(DATA_YAML),
+            "epochs": cfg["epochs"],
+            "batch": cfg["batch"],
+            "imgsz": cfg["imgsz"],
+            "patience": cfg["patience"],
+            "project": cfg["project"],
+            "name": cfg["name"],
+            "exist_ok": True,
+            "workers": cfg.get("workers", 4),
+        }
+        if "optimizer" in cfg:
+            train_args["optimizer"] = cfg["optimizer"]
+        for aug_key in ("mosaic", "fliplr", "hsv_h", "hsv_s", "hsv_v", "scale"):
+            if aug_key in cfg:
+                train_args[aug_key] = cfg[aug_key]
 
-    model.train(**train_args)
+        model.train(**train_args)
 
     best_weights = Path(cfg["project"]) / cfg["name"] / "weights" / "best.pt"
     if not best_weights.exists():

@@ -53,8 +53,15 @@ make smoke
 
 ## Configs
 
-- `configs/smoke.yaml` — 300 images, 3 epochs, imgsz=320, batch=4
-- `configs/full.yaml` — ~39k images, 200 epochs, imgsz=640, batch=16, SGD, augmentations
+Training configs live in `src/config.py` (`SMOKE_CONFIG`, `SANITY_CONFIG`,
+`FULL_CONFIG`) — selected via `--mode`. These are the source of truth read by
+`train.py`.
+
+- smoke — 300 images, 3 epochs, imgsz=320, batch=4
+- full  — ~39k images, 150 epochs, imgsz=640, batch=16, SGD, augmentations
+
+To resume an interrupted full run from the last checkpoint:
+`make full-resume` (or `python src/train.py --mode full --resume`).
 
 ## Running Tests
 
