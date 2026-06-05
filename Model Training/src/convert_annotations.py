@@ -58,22 +58,56 @@ def mask_to_yolo_polygons(
     return lines
 
 
+def _label(panel: np.ndarray, text: str) -> np.ndarray:
+    panel = panel.copy()
+    cv2.rectangle(panel, (0, 0), (panel.shape[1], 22), (0, 0, 0), -1)
+    cv2.putText(panel, text, (5, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+    return panel
+
+
 def save_qc_overlay(
-    image_path: Path, polygons: list[str], qc_out_dir: Path, img_w: int, img_h: int
+    image_path: Path, mask_path: Path, polygons: list[str], qc_out_dir: Path,
+    invert: bool = False,
 ) -> None:
+    """Write a 3-panel QC image: original | polygon overlay | ground-truth mask.
+
+    The mask panel is polarity-corrected (crack = white) so a crack visible there
+    with no green in the overlay panel is an obvious missed label.
+    """
     img = cv2.imread(str(image_path))
     if img is None:
         return
+    h, w = img.shape[:2]
+
+    # Panel 2: polygon overlay
     overlay = img.copy()
     for line in polygons:
         parts = line.split()
         coords = np.array(parts[1:], dtype=float).reshape(-1, 2)
-        pts = (coords * [img_w, img_h]).astype(np.int32)
+        pts = (coords * [w, h]).astype(np.int32)
         cv2.polylines(overlay, [pts], True, (0, 255, 0), 2)
         cv2.fillPoly(overlay, [pts], (0, 200, 0))
     blended = cv2.addWeighted(img, 0.7, overlay, 0.3, 0)
+
+    # Panel 3: ground-truth mask (crack = white)
+    m = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+    if m is None:
+        mask_bgr = np.zeros((h, w, 3), dtype=np.uint8)
+    else:
+        if invert:
+            m = 255 - m
+        _, mbin = cv2.threshold(m, 127, 255, cv2.THRESH_BINARY)
+        if mbin.shape[:2] != (h, w):
+            mbin = cv2.resize(mbin, (w, h), interpolation=cv2.INTER_NEAREST)
+        mask_bgr = cv2.cvtColor(mbin, cv2.COLOR_GRAY2BGR)
+
+    combined = np.hstack([
+        _label(img, "ORIGINAL"),
+        _label(blended, f"POLYGONS n={len(polygons)}"),
+        _label(mask_bgr, "GT MASK (crack=white)"),
+    ])
     qc_out_dir.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(qc_out_dir / image_path.name), blended)
+    cv2.imwrite(str(qc_out_dir / image_path.name), combined)
 
 
 def convert_dataset(
@@ -108,10 +142,7 @@ def convert_dataset(
             if not img_path.exists():
                 img_path = image_dir / f"{stem}.png"
             if img_path.exists():
-                tmp = cv2.imread(str(img_path))
-                if tmp is not None:
-                    h, w = tmp.shape[:2]
-                    save_qc_overlay(img_path, polygons, qc_out_dir, w, h)
+                save_qc_overlay(img_path, mask_path, polygons, qc_out_dir, invert=invert)
         converted += 1
 
     return converted
