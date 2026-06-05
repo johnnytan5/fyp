@@ -1,6 +1,7 @@
 .PHONY: smoke full full-resume build-local build-runpod download convert clean-data subset eval-conversion test
 
 MODE ?= smoke
+N ?= 300
 
 COMPOSE = docker compose -f docker/docker-compose.yml
 
@@ -58,10 +59,7 @@ full-subset:
 		"data/raw/omnicrack30k/images/test:data/yolo/labels_raw/omnicrack30k/test:test"
 
 eval-conversion:
-	python src/eval_mask_conversion.py \
-		--mask-dir data/raw/crackseg9k/masks \
-		--label-dir data/yolo/labels_raw/crackseg9k \
-		--n $(N)
+	python src/eval_mask_conversion.py --all --no-images --n $(N)
 
 test:
 	python -m pytest tests/ -v
