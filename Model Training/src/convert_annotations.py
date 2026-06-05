@@ -13,11 +13,22 @@ from config import MIN_AREA, EPSILON_RATIO, QC_SAMPLES, CRACKSEG9K, \
     OMNICRACK30K, CRACKSEG9K_LABELS, OMNICRACK_LABELS, QC_DIR
 
 
-def mask_to_yolo_polygons(mask_path: Path, min_area: int = MIN_AREA) -> list[str]:
-    """Return YOLO-Seg lines for one binary mask PNG. Class is always 0 (crack)."""
+def mask_to_yolo_polygons(
+    mask_path: Path, min_area: int = MIN_AREA, invert: bool = False
+) -> list[str]:
+    """Return YOLO-Seg lines for one binary mask PNG. Class is always 0 (crack).
+
+    Mask polarity differs by dataset: CrackSeg9k stores white crack on black bg
+    (correct), OmniCrack30k stores black crack on white bg (inverted). Pass
+    invert=True for datasets where the crack is the dark class so it becomes
+    foreground before contouring.
+    """
     mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
     if mask is None:
         raise FileNotFoundError(mask_path)
+
+    if invert:
+        mask = 255 - mask
 
     _, binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     h, w = binary.shape
@@ -63,6 +74,7 @@ def convert_dataset(
     label_out_dir: Path,
     qc_out_dir: Path,
     min_area: int = MIN_AREA,
+    invert: bool = False,
 ) -> int:
     """Convert all masks in mask_dir; returns count of converted files."""
     if not mask_dir.exists():
@@ -80,7 +92,7 @@ def convert_dataset(
 
     for mask_path in mask_files:
         stem = mask_path.stem
-        polygons = mask_to_yolo_polygons(mask_path, min_area)
+        polygons = mask_to_yolo_polygons(mask_path, min_area, invert=invert)
         (label_out_dir / f"{stem}.txt").write_text("\n".join(polygons))
 
         if mask_path in qc_candidates:
@@ -109,7 +121,7 @@ def main() -> None:
         n = convert_dataset(
             CRACKSEG9K / "images", CRACKSEG9K / "masks",
             CRACKSEG9K_LABELS, QC_DIR / "crackseg9k",
-            args.min_area,
+            args.min_area, invert=False,  # white crack on black bg — correct as-is
         )
         print(f"CrackSeg9k: converted {n}")
         total += n
@@ -127,7 +139,7 @@ def main() -> None:
                 n = convert_dataset(
                     img_dir, mask_dir,
                     label_dir, QC_DIR / "omnicrack30k" / split,
-                    args.min_area,
+                    args.min_area, invert=True,  # black crack on white bg — flip
                 )
                 print(f"OmniCrack30k/{split}: converted {n}")
                 total += n
