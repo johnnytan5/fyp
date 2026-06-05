@@ -36,7 +36,7 @@ HF_DATASET = "rimvydasrub/crackseg9k"
 # ---------------------------------------------------------------------------
 # Conversion parameters
 # ---------------------------------------------------------------------------
-MIN_CRACK_PIXELS = 20  # drop contours with fewer than this many crack pixels.
+MIN_CRACK_PIXELS = 15  # drop contours with fewer than this many crack pixels.
                        # Filters on PIXEL COUNT (not enclosed area) so 1px-wide
                        # hairlines survive at true width — no dilation, so the
                        # mask geometry stays faithful for crack length/width
