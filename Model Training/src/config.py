@@ -36,11 +36,12 @@ HF_DATASET = "rimvydasrub/crackseg9k"
 # ---------------------------------------------------------------------------
 # Conversion parameters
 # ---------------------------------------------------------------------------
-MIN_AREA = 30          # min contour area (px). Low so thin cracks survive.
+MIN_CRACK_PIXELS = 20  # drop contours with fewer than this many crack pixels.
+                       # Filters on PIXEL COUNT (not enclosed area) so 1px-wide
+                       # hairlines survive at true width — no dilation, so the
+                       # mask geometry stays faithful for crack length/width
+                       # measurement downstream. See mask_to_yolo_polygons.
 EPSILON_RATIO = 0.0005
-DILATE_ITER = 1        # dilate mask (3x3) before contouring so 1px-wide cracks
-                       # form a polygon with real area. 0 disables. See
-                       # convert_annotations.mask_to_yolo_polygons.
 QC_SAMPLES = 20
 
 # ---------------------------------------------------------------------------

@@ -9,13 +9,20 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import MIN_AREA, EPSILON_RATIO, DILATE_ITER, QC_SAMPLES, CRACKSEG9K, \
+from config import MIN_CRACK_PIXELS, EPSILON_RATIO, QC_SAMPLES, CRACKSEG9K, \
     OMNICRACK30K, CRACKSEG9K_LABELS, OMNICRACK_LABELS, QC_DIR
 
 
+def _contour_pixel_count(contour: np.ndarray) -> int:
+    """Number of filled pixels in a contour (computed in a bbox-sized ROI)."""
+    x, y, bw, bh = cv2.boundingRect(contour)
+    roi = np.zeros((bh, bw), dtype=np.uint8)
+    cv2.drawContours(roi, [contour], -1, 1, thickness=-1, offset=(-x, -y))
+    return int(roi.sum())
+
+
 def mask_to_yolo_polygons(
-    mask_path: Path, min_area: int = MIN_AREA, invert: bool = False,
-    dilate_iter: int = DILATE_ITER,
+    mask_path: Path, min_pixels: int = MIN_CRACK_PIXELS, invert: bool = False,
 ) -> list[str]:
     """Return YOLO-Seg lines for one binary mask PNG. Class is always 0 (crack).
 
@@ -24,10 +31,10 @@ def mask_to_yolo_polygons(
     invert=True for datasets where the crack is the dark class so it becomes
     foreground before contouring.
 
-    Thin (≈1px) cracks enclose almost no area, so cv2.contourArea would filter
-    them out and approxPolyDP would collapse them to <3 points — dropping ~a
-    third of OmniCrack30k cracks. dilate_iter>0 widens them first so they form a
-    valid polygon with real area.
+    Contours are filtered by PIXEL COUNT, not cv2.contourArea: a ≈1px-wide crack
+    encloses almost no area (area-filtering dropped ~a third of OmniCrack30k
+    cracks), but has plenty of pixels along its length. No dilation is applied,
+    so crack width is preserved at true scale for downstream measurement.
     """
     mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
     if mask is None:
@@ -37,15 +44,13 @@ def mask_to_yolo_polygons(
         mask = 255 - mask
 
     _, binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-    if dilate_iter > 0:
-        binary = cv2.dilate(binary, np.ones((3, 3), np.uint8), iterations=dilate_iter)
     h, w = binary.shape
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     lines = []
     for contour in contours:
-        if cv2.contourArea(contour) < min_area:
+        if _contour_pixel_count(contour) < min_pixels:
             continue
         epsilon = EPSILON_RATIO * cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, epsilon, True)
@@ -115,7 +120,7 @@ def convert_dataset(
     mask_dir: Path,
     label_out_dir: Path,
     qc_out_dir: Path,
-    min_area: int = MIN_AREA,
+    min_pixels: int = MIN_CRACK_PIXELS,
     invert: bool = False,
 ) -> int:
     """Convert all masks in mask_dir; returns count of converted files."""
@@ -134,7 +139,7 @@ def convert_dataset(
 
     for mask_path in mask_files:
         stem = mask_path.stem
-        polygons = mask_to_yolo_polygons(mask_path, min_area, invert=invert)
+        polygons = mask_to_yolo_polygons(mask_path, min_pixels, invert=invert)
         (label_out_dir / f"{stem}.txt").write_text("\n".join(polygons))
 
         if mask_path in qc_candidates:
@@ -150,7 +155,8 @@ def convert_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--min-area", default=MIN_AREA, type=int)
+    parser.add_argument("--min-pixels", default=MIN_CRACK_PIXELS, type=int,
+                        help="Drop contours with fewer than this many crack pixels")
     args = parser.parse_args()
 
     total = 0
@@ -160,7 +166,7 @@ def main() -> None:
         n = convert_dataset(
             CRACKSEG9K / "images", CRACKSEG9K / "masks",
             CRACKSEG9K_LABELS, QC_DIR / "crackseg9k",
-            args.min_area, invert=False,  # white crack on black bg — correct as-is
+            args.min_pixels, invert=False,  # white crack on black bg — correct as-is
         )
         print(f"CrackSeg9k: converted {n}")
         total += n
@@ -178,7 +184,7 @@ def main() -> None:
                 n = convert_dataset(
                     img_dir, mask_dir,
                     label_dir, QC_DIR / "omnicrack30k" / split,
-                    args.min_area, invert=True,  # black crack on white bg — flip
+                    args.min_pixels, invert=True,  # black crack on white bg — flip
                 )
                 print(f"OmniCrack30k/{split}: converted {n}")
                 total += n

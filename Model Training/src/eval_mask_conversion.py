@@ -20,7 +20,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from convert_annotations import mask_to_yolo_polygons, MIN_AREA
+from convert_annotations import mask_to_yolo_polygons, MIN_CRACK_PIXELS
 
 
 def polygons_to_mask(polygons: list[str], h: int, w: int) -> np.ndarray:
@@ -80,7 +80,7 @@ def evaluate_samples(
     out_dir: Path | None,
     n: int,
     invert: bool,
-    min_area: int = MIN_AREA,
+    min_pixels: int = MIN_CRACK_PIXELS,
     seed: int = 42,
     sequential: bool = False,
 ) -> dict:
@@ -106,7 +106,7 @@ def evaluate_samples(
         src = (255 - orig) if invert else orig          # crack = white after this
         crack_px = int((src > 127).sum())
 
-        polygons = mask_to_yolo_polygons(mask_path, min_area, invert=invert)
+        polygons = mask_to_yolo_polygons(mask_path, min_pixels, invert=invert)
 
         if crack_px == 0:
             background += 1                              # genuine no-crack image
@@ -152,7 +152,7 @@ def main() -> None:
                         help="Crack is the dark class (OmniCrack30k); flip before eval")
     parser.add_argument("--out-dir", default="data/yolo/_eval_conversion", type=Path)
     parser.add_argument("--no-images", action="store_true", help="Numbers only, skip comparison PNGs")
-    parser.add_argument("--min-area", default=MIN_AREA, type=int)
+    parser.add_argument("--min-pixels", default=MIN_CRACK_PIXELS, type=int)
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--sequential", action="store_true",
                         help="Sample evenly-spaced by position (reproducible, ignores --seed)")
@@ -171,10 +171,10 @@ def main() -> None:
         ]
         for name, mdir, inv in targets:
             sub = (out / name.replace("/", "_")) if out is not None else None
-            _print(name, evaluate_samples(mdir, sub, args.n, inv, args.min_area, args.seed, args.sequential))
+            _print(name, evaluate_samples(mdir, sub, args.n, inv, args.min_pixels, args.seed, args.sequential))
     elif args.mask_dir:
         _print(str(args.mask_dir),
-               evaluate_samples(args.mask_dir, out, args.n, args.invert, args.min_area, args.seed, args.sequential))
+               evaluate_samples(args.mask_dir, out, args.n, args.invert, args.min_pixels, args.seed, args.sequential))
     else:
         print("Specify --mask-dir [--invert], or --all for both datasets.")
         return
