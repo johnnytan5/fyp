@@ -9,12 +9,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import MIN_AREA, EPSILON_RATIO, QC_SAMPLES, CRACKSEG9K, \
+from config import MIN_AREA, EPSILON_RATIO, DILATE_ITER, QC_SAMPLES, CRACKSEG9K, \
     OMNICRACK30K, CRACKSEG9K_LABELS, OMNICRACK_LABELS, QC_DIR
 
 
 def mask_to_yolo_polygons(
-    mask_path: Path, min_area: int = MIN_AREA, invert: bool = False
+    mask_path: Path, min_area: int = MIN_AREA, invert: bool = False,
+    dilate_iter: int = DILATE_ITER,
 ) -> list[str]:
     """Return YOLO-Seg lines for one binary mask PNG. Class is always 0 (crack).
 
@@ -22,6 +23,11 @@ def mask_to_yolo_polygons(
     (correct), OmniCrack30k stores black crack on white bg (inverted). Pass
     invert=True for datasets where the crack is the dark class so it becomes
     foreground before contouring.
+
+    Thin (≈1px) cracks enclose almost no area, so cv2.contourArea would filter
+    them out and approxPolyDP would collapse them to <3 points — dropping ~a
+    third of OmniCrack30k cracks. dilate_iter>0 widens them first so they form a
+    valid polygon with real area.
     """
     mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
     if mask is None:
@@ -31,6 +37,8 @@ def mask_to_yolo_polygons(
         mask = 255 - mask
 
     _, binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    if dilate_iter > 0:
+        binary = cv2.dilate(binary, np.ones((3, 3), np.uint8), iterations=dilate_iter)
     h, w = binary.shape
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
