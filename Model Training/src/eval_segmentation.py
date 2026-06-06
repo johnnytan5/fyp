@@ -78,28 +78,31 @@ def load_gt(mask_path: Path, invert: bool, shape: tuple[int, int]) -> np.ndarray
 # --------------------------------------------------------------------------- #
 # Prediction: union instance masks (filtered by confidence) -> binary map
 # --------------------------------------------------------------------------- #
-def predict_masks(model: YOLO, image_path: Path, imgsz: int, device: str):
-    """Return (orig_h, orig_w, masks[N,h,w] bool, confs[N])."""
-    res = model.predict(str(image_path), conf=0.01, imgsz=imgsz, retina_masks=True,
+def predict_masks(model: YOLO, image_path: Path, imgsz: int, device: str,
+                  min_conf: float, max_det: int):
+    """Return (orig_h, orig_w, polygons[list of (P,2) in orig coords], confs[N]).
+
+    Uses polygon contours (masks.xy), not full-res mask tensors: memory stays
+    bounded by imgsz regardless of image size (retina masks on multi-thousand-px
+    OmniCrack images OOM the GPU). Polygons are rasterized per-conf downstream.
+    """
+    res = model.predict(str(image_path), conf=min_conf, imgsz=imgsz, max_det=max_det,
                         device=device, verbose=False)[0]
     h, w = res.orig_shape
-    if res.masks is None or len(res.masks.data) == 0:
-        return h, w, np.zeros((0, h, w), dtype=bool), np.zeros((0,))
-    masks = res.masks.data.cpu().numpy() > 0.5            # (N, h, w)
+    if res.masks is None or len(res.masks) == 0:
+        return h, w, [], np.zeros((0,))
+    polys = [p for p in res.masks.xy]                      # each (P,2), orig-image coords
     confs = res.boxes.conf.cpu().numpy()
-    if masks.shape[1:] != (h, w):                          # safety resize
-        masks = np.stack([cv2.resize(m.astype(np.uint8), (w, h),
-                                     interpolation=cv2.INTER_NEAREST).astype(bool)
-                          for m in masks]) if len(masks) else np.zeros((0, h, w), bool)
-    return h, w, masks, confs
+    return h, w, polys, confs
 
 
-def union_at_conf(masks: np.ndarray, confs: np.ndarray, conf: float,
+def union_at_conf(polys: list, confs: np.ndarray, conf: float,
                   shape: tuple[int, int]) -> np.ndarray:
-    sel = confs >= conf
-    if not sel.any():
-        return np.zeros(shape, dtype=bool)
-    return masks[sel].any(axis=0)
+    canvas = np.zeros(shape, dtype=np.uint8)
+    for p, c in zip(polys, confs):
+        if c >= conf and len(p) >= 3:
+            cv2.fillPoly(canvas, [p.astype(np.int32)], 1)
+    return canvas.astype(bool)
 
 
 # --------------------------------------------------------------------------- #
@@ -177,6 +180,7 @@ def main() -> None:
     parser.add_argument("--tolerance", default=4, type=int, help="clIoU buffer in px")
     parser.add_argument("--confs", type=float, nargs="+", default=DEFAULT_CONFS)
     parser.add_argument("--device", default="0")
+    parser.add_argument("--max-det", type=int, default=100, help="cap instances per image")
     parser.add_argument("--max-images", type=int, default=0, help="0 = all")
     parser.add_argument("--out-dir", default="results", type=Path)
     args = parser.parse_args()
@@ -209,13 +213,15 @@ def main() -> None:
             skipped += 1
             continue
         dataset, mask_path, invert = info
-        h, w, masks, confs = predict_masks(model, img_path, args.imgsz, args.device)
+        min_conf = min(args.confs)
+        h, w, polys, confs = predict_masks(model, img_path, args.imgsz, args.device,
+                                           min_conf, args.max_det)
         gt = load_gt(mask_path, invert, (h, w))
         gt_dil = cv2.dilate(gt.astype(np.uint8), k).astype(bool)
         sg = skeletonize(gt) if gt.any() else np.zeros_like(gt)
 
         for conf in args.confs:
-            pred = union_at_conf(masks, confs, conf, (h, w))
+            pred = union_at_conf(polys, confs, conf, (h, w))
             pred_dil = cv2.dilate(pred.astype(np.uint8), k).astype(bool)
             sp = skeletonize(pred) if pred.any() else np.zeros_like(pred)
             acc[(dataset, conf)].update(pred, gt, gt_dil, pred_dil, sp, sg)
