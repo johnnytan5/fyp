@@ -65,7 +65,7 @@ def main() -> None:
         return
 
     best_model = YOLO(str(best_weights))
-    val_results = best_model.val(data=str(DATA_YAML))
+    val_results = best_model.val(data=str(DATA_YAML), imgsz=cfg["imgsz"])
 
     seg = getattr(val_results, "seg", None)
     map50 = seg.map50 if seg is not None else val_results.box.map50

@@ -80,9 +80,9 @@ SMOKE_CONFIG = {
 FULL_CONFIG = {
     "mode": "full",
     "base_model": "yolov8s-seg.pt",
-    "epochs": 150,
-    "batch": 16,
-    "imgsz": 640,
+    "epochs": 200,
+    "batch": -1,  # autobatch: profiles GPU mem at imgsz, picks batch (~60% util)
+    "imgsz": 1280,
     "patience": 30,
     "optimizer": "SGD",
     "project": "runs/full",
