@@ -96,6 +96,40 @@ FULL_CONFIG = {
     "scale": 0.5,
 }
 
+FULL_BASELINE_CONFIG = {
+    # Slot B: proven 640px recipe, kept unchanged as the reference every other
+    # slot is compared against. Separate project dir so it never collides with
+    # FULL_CONFIG's output.
+    **{k: v for k, v in FULL_CONFIG.items() if k not in ("epochs", "imgsz", "batch", "project")},
+    "epochs": 150,
+    "imgsz": 640,
+    "batch": 16,
+    "project": "runs/full_baseline",
+}
+
+FULL_YOLO11_CONFIG = {
+    # Slot C: same recipe as the baseline, only the architecture changes, so a
+    # score difference is attributable to the model generation, not settings.
+    **{k: v for k, v in FULL_BASELINE_CONFIG.items() if k != "base_model"},
+    "base_model": "yolo11s-seg.pt",
+    "project": "runs/full_yolo11",
+}
+
+UNET_CONFIG = {
+    # Slot D: semantic arch (U-Net-ResNet34) + imbalance-aware loss (Focal
+    # Tversky), same imgsz/epochs as the baseline so the comparison isolates
+    # "architecture+loss family" as the one variable. See train_unet.py.
+    "epochs": 150,
+    "batch": 16,
+    "imgsz": 640,
+    "patience": 30,
+    "lr": 1e-3,
+    "weight_decay": 1e-4,
+    "workers": 8,
+    "project": "runs/full_unet",
+    "name": "exp",
+}
+
 SANITY_CONFIG = {
     "mode": "sanity",
     "base_model": "yolov8s-seg.pt",
@@ -112,7 +146,10 @@ SANITY_CONFIG = {
 def get_config(mode: str | None = None) -> dict:
     """Return training config for the given mode."""
     m = mode or MODE
-    configs = {"smoke": SMOKE_CONFIG, "sanity": SANITY_CONFIG, "full": FULL_CONFIG}
+    configs = {
+        "smoke": SMOKE_CONFIG, "sanity": SANITY_CONFIG, "full": FULL_CONFIG,
+        "full-baseline": FULL_BASELINE_CONFIG, "full-yolo11": FULL_YOLO11_CONFIG,
+    }
     if m not in configs:
         raise ValueError(f"Invalid mode: {m}. Must be one of {set(configs.keys())}.")
     return configs[m]

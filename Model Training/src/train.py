@@ -16,7 +16,8 @@ from config import get_config, MODE, DATA_YAML
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", default=MODE, choices=["smoke", "sanity", "full"])
+    parser.add_argument("--mode", default=MODE,
+                        choices=["smoke", "sanity", "full", "full-baseline", "full-yolo11"])
     parser.add_argument(
         "--resume", action="store_true",
         help="Resume from last.pt in the run dir (e.g. after a pod dies). "

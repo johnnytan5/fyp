@@ -1,4 +1,5 @@
-ultralytics==8.2.0
+ultralytics==8.4.101  # bumped from 8.2.0: needed for yolo11-seg configs/weights
+segmentation-models-pytorch>=0.3.4  # U-Net etc for src/train_unet.py
 torch>=2.3.0
 torchvision>=0.18.0
 opencv-python-headless>=4.8.0
