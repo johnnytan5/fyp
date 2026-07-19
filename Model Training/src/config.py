@@ -130,6 +130,19 @@ UNET_CONFIG = {
     "name": "exp",
 }
 
+UNET_1280_CONFIG = {
+    # Slot E: same recipe as D, imgsz only -> tests whether resolution helps a
+    # decoder that (unlike YOLO's fixed 160px mask proto) already upsamples to
+    # full input res, so the hypothesis from slot A may or may not transfer.
+    # batch cut 16->4: no autobatch here (plain PyTorch loop), and 1280px is
+    # ~4x the activation memory of 640px -- unverified on real GPU, watch
+    # nvidia-smi on first launch and raise batch if there's headroom.
+    **{k: v for k, v in UNET_CONFIG.items() if k not in ("imgsz", "batch", "project")},
+    "imgsz": 1280,
+    "batch": 4,
+    "project": "runs/full_unet_1280",
+}
+
 SANITY_CONFIG = {
     "mode": "sanity",
     "base_model": "yolov8s-seg.pt",

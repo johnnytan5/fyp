@@ -20,7 +20,9 @@ from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import DATA_YOLO, UNET_CONFIG
+from config import DATA_YOLO, UNET_CONFIG, UNET_1280_CONFIG
+
+CONFIGS = {"unet": UNET_CONFIG, "unet-1280": UNET_1280_CONFIG}
 from eval_segmentation import resolve_gt, load_gt  # reuse symlink + polarity logic
 
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
@@ -104,6 +106,7 @@ def evaluate(model, loader, device) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="unet", choices=list(CONFIGS))
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
@@ -112,7 +115,7 @@ def main() -> None:
     except ImportError:
         sys.exit("pip install segmentation-models-pytorch")
 
-    cfg = UNET_CONFIG
+    cfg = CONFIGS[args.config]
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[train_unet] device={device} resume={args.resume} cfg={cfg}")
 
