@@ -1,10 +1,15 @@
-ultralytics==8.4.101  # bumped from 8.2.0: needed for yolo11-seg configs/weights
-segmentation-models-pytorch>=0.3.4  # U-Net etc for src/train_unet.py
-torch>=2.3.0
-torchvision>=0.18.0
-opencv-python-headless>=4.8.0
-scikit-image>=0.22.0
-numpy>=1.24.0,<2.0.0
+# ── GPU-bound deps (pinned hard — these broke on fresh installs when unpinned) ──
+# Install with: pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu121
+# (the cu121 index is needed for the CUDA builds of torch/torchvision)
+ultralytics==8.4.101          # pinned for yolo11-seg support (8.3.0 used for slot C only, downgraded on that box)
+torch==2.5.1+cu121            # pinned to 2.5.1 — 2.12/2.13 broke optimizer resume across hosts
+torchvision==0.20.1+cu121     # pinned to match torch 2.5.1 (0.27/0.28 require torch>=2.13)
+segmentation-models-pytorch==0.5.0  # U-Net etc for src/train_unet.py
+
+# ── CPU-bound deps (pinned — proven stable, won't break across hosts) ──
+opencv-python-headless==4.10.0
+scikit-image==0.24.0
+numpy>=1.24.0,<2.0.0         # capped below 2.0 — ultralytics 8.4 uses np.trapz (removed in numpy 2.x)
 pandas>=2.0.0
 PyYAML>=6.0
 tqdm>=4.65.0
