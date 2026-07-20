@@ -183,6 +183,8 @@ def main() -> None:
     parser.add_argument("--max-det", type=int, default=100, help="cap instances per image")
     parser.add_argument("--max-images", type=int, default=0, help="0 = all")
     parser.add_argument("--out-dir", default="results", type=Path)
+    parser.add_argument("--tag", type=str, default=None,
+                        help="label for output filenames (default: derived from weights path project name)")
     args = parser.parse_args()
 
     try:
@@ -200,6 +202,10 @@ def main() -> None:
     print(f"[eval] {args.weights} on {args.split}: {len(images)} images | "
           f"confs={args.confs} | tolerance={args.tolerance}px")
     model = YOLO(str(args.weights))
+
+    # derive tag from weights path if not given explicitly
+    tag = args.tag or Path(args.weights).resolve().parent.parent.parent.name  # project dir name
+    # e.g. runs/full_yolo11/exp/weights/best.pt -> full_yolo11
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                   (2 * args.tolerance + 1, 2 * args.tolerance + 1))
 
@@ -245,7 +251,7 @@ def main() -> None:
 
     _print_tables(results, args.confs)
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"seg_eval_{args.split}"
+    stem = f"seg_eval_{tag}_{args.split}"
     (args.out_dir / f"{stem}.json").write_text(json.dumps(results, indent=2))
     _write_csv(args.out_dir / f"{stem}.csv", results, args.confs)
     print(f"\nSaved {args.out_dir/stem}.json and .csv")
