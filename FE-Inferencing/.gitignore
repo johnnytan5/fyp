@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Model weights (fetched via download_weights.py, not committed)
+best.pt
+weights/
+
+# HuggingFace cache
+.cache/
+
+# Local project data (videos, sampled frames, panoramas, sqlite db) --
+# generated per-user by app_pipeline.py, never meant to be committed
+projects/
+
+# OS
+.DS_Store

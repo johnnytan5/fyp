@@ -6,3 +6,11 @@ __pycache__/
 .venv/
 venv/
 *.ipynb_checkpoints/
+
+# generated run outputs / large binaries / datasets -- not meant to be committed
+runs/
+*.pt
+*.zip
+
+# leftover scratch plan doc, not ongoing project documentation
+docs/superpowers/plans/2026-05-31-crack-seg-pipeline.md
