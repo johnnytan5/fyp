@@ -1,0 +1,8 @@
+streamlit>=1.28
+ultralytics>=8.2
+sahi>=0.11
+opencv-python-headless
+torch>=2.3
+Pillow
+numpy>=1.24.0
+huggingface-hub>=0.23.0
