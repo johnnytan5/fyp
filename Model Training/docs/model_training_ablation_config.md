@@ -181,15 +181,35 @@ baseline.
 
 ### Status / Results
 
-| slot | status | mask mAP50 (val, training-time) | test-set F1 / IoU / clIoU₄ₚₓ | HF upload |
-|---|---|---|---|---|
-| A | training (Japan, GPU0) | — | — | — |
-| B | **done** | 0.192 (epoch 150) | 0.622 / 0.451 / 0.589 (best-F1) | ✅ `johnnytan5/2nd-run-fyp-train` |
-| C | training (Japan, GPU1) | — | — | — |
-| D | training (Japan, GPU2) | — | — | — |
-| E | training (Japan, GPU3) | — | — | — |
+All 5 slots finished training and are uploaded to HF (verified 2026-09-19,
+repo last modified 2026-07-22). Numbers below are test-set pixel metrics at
+each slot's own best-F1 operating point, pulled fresh from each slot's
+`eval/seg_eval_test.json` in one consistent batch — supersedes the earlier
+single-slot (B) numbers previously listed here.
 
-*(Fill in as each completes — see §7 for the exact eval commands.)*
+| slot | status | test F1 | test IoU | test clIoU₄ₚₓ | test clDice | HF path |
+|---|---|---|---|---|---|---|
+| A | done | 0.623 | 0.452 | 0.620 | 0.585 | `A-yolov8-1280-200epoch/` |
+| B | done | 0.638 | 0.468 | 0.617 | 0.679 | `B-baseline-yolov8-640-150epoch/` |
+| C | done | 0.617 | 0.446 | 0.591 | 0.660 | `C-yolov11-640-150epoch/` |
+| **D** | **done** | **0.698** | **0.536** | **0.748** | **0.759** | `D-unet-640-150epoch/` |
+| E | done | 0.655 | 0.487 | 0.700 | 0.740 | `E-unet-1280-150epoch/` |
+
+**Result: Slot D (U-Net-ResNet34, 640px) wins outright** — beats every YOLO
+variant on every metric, and its clIoU (0.748) clears the nnU-Net ensemble
+benchmark from §4's literature table (0.64). Holds up split by dataset too
+(CrackSeg9k: F1 0.746/IoU 0.594/clIoU 0.818; OmniCrack30k: F1 0.690/IoU
+0.527/clIoU 0.736) — not a one-dataset fluke.
+
+Both ablation hypotheses under test came back **negative**:
+- **Resolution doesn't help**: A (1280px) is slightly worse than B (640px);
+  E (1280px) is clearly worse than D (640px) — despite U-Net decoding to
+  full input resolution natively, unlike YOLO's fixed 160px mask proto.
+- **Architecture generation doesn't help**: C (yolo11) trails B (yolov8) on
+  every metric.
+- **Architecture family is what mattered**: swapping the whole approach
+  (U-Net semantic segmentation vs YOLO instance segmentation) is the only
+  change that moved the needle, and it moved it by a wide margin.
 
 ---
 
@@ -260,15 +280,12 @@ scored with a mismatched resolution by mistake.
   └── eval/                       # seg_eval_test.{json,csv}
   ```
 
-**⚠️ Open decision — not yet made**: slots A/C/D/E need a home. Two options:
-- **(a) Same repo, new subfolders** — e.g. `full-1280/`, `full-yolo11/`,
-  `unet/`, `unet-1280/`, each mirroring the `best_<slot>.pt` +
-  `<slot>/run/` + `<slot>/eval/` pattern above.
-- **(b) New repo** for this batch (different infra/session from B — trained
-  on Alibaba Japan L20s, not RunPod L4).
-
-Lean toward **(a)** for a single source of truth per model-comparison story,
-but confirm before uploading.
+**Resolved: option (a)** — same repo, one subfolder per slot
+(`A-yolov8-1280-200epoch/`, `B-baseline-yolov8-640-150epoch/`,
+`C-yolov11-640-150epoch/`, `D-unet-640-150epoch/`, `E-unet-1280-150epoch/`),
+each with `best.pt` + `eval/` + `run/` (weights/plots/args.yaml for YOLO
+slots; just `run/weights/{best,last}.pt` for the U-Net slots, matching
+train_unet.py's lighter checkpointing).
 
 **Per-slot `config.json` template** (mirrors slot B's, adapt values):
 ```json
@@ -324,7 +341,7 @@ hf upload johnnytan5/2nd-run-fyp-train results <repo_path>/eval --repo-type mode
 
 ## 10. Open items
 
-- [ ] Decide HF repo structure for A/C/D/E (§8) before first upload.
+- [x] Decide HF repo structure for A/C/D/E (§8) before first upload — resolved, option (a).
 - [ ] `eval_segmentation.py` originally had no U-Net support — resolved via
       new `eval_unet.py` (reuses the same `Accum` metric math), but if any
       future eval needs to compare YOLO + U-Net predictions on the *same*
