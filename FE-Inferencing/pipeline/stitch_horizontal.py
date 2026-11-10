@@ -35,12 +35,15 @@ CONF_THRESH = 1.0   # keep strict: lowering this let a low-confidence pair corru
                     # joint bundle adjustment in testing (fragmented/misplaced panorama)
 WORK_MEGAPIX = 0.6
 SEAM_MEGAPIX = 0.1
+MAX_WARP_SIDE_RATIO = 4.0  # ponytail: tunable -- normal frames warp within ~1.3x of the row median
+REMAP_MAX_PX = 32000       # cv2.remap asserts every side < SHRT_MAX (32767)
 
 
 def stitch_horizontal(
     image_paths: list[Path],
     detections_per_frame: list[list[dict]] | None = None,
     range_width: int = RANGE_WIDTH,
+    conf_thresh: float = CONF_THRESH,
 ) -> dict[str, Any]:
     """Returns {"panorama": np.ndarray, "detections": [...], "dropped": [indices]}.
     `detections_per_frame[i]` (if given) must line up with `image_paths[i]`,
@@ -66,7 +69,7 @@ def stitch_horizontal(
     pairwise_matches = matcher.apply2(features)
     matcher.collectGarbage()
 
-    indices = [int(i) for i in cv2.detail.leaveBiggestComponent(features, pairwise_matches, CONF_THRESH)]
+    indices = [int(i) for i in cv2.detail.leaveBiggestComponent(features, pairwise_matches, conf_thresh)]
     dropped = [i for i in range(n) if i not in indices]
     if dropped:
         print(f"[stitch_horizontal] WARNING: {len(dropped)}/{n} frames dropped (not connected "
@@ -86,7 +89,7 @@ def stitch_horizontal(
         cam.R = cam.R.astype(np.float32)
 
     adjuster = cv2.detail_BundleAdjusterAffinePartial()
-    adjuster.setConfThresh(CONF_THRESH)
+    adjuster.setConfThresh(conf_thresh)
     ok, cameras = adjuster.apply(features, pairwise_matches, cameras)
     if not ok:
         raise RuntimeError("bundle adjustment failed to converge")
@@ -94,6 +97,32 @@ def stitch_horizontal(
     focals = sorted(cam.focal for cam in cameras)
     mid = len(focals) // 2
     warped_image_scale = focals[mid] if len(focals) % 2 else (focals[mid - 1] + focals[mid]) / 2
+
+    # A frame can pass the connectivity check yet get a degenerate camera from
+    # bundle adjustment: its warp explodes (seen: 190k x 238k px -> OOM kill;
+    # long thin warps -> remap's 32767 px limit) or collapses (seen: 4x4 px).
+    # warpRoi sizes each warp without allocating. Keep a frame if each side is
+    # within 1/r..r of the row's median warped side AND its full-res warp stays
+    # under remap's hard limit (the cap still holds when the median is skewed).
+    probe = cv2.PyRotationWarper('affine', warped_image_scale * seam_work_aspect)
+    seam_wh = (int(round(w0 * seam_scale)), int(round(h0 * seam_scale)))
+    sides = [probe.warpRoi(seam_wh, cam.K().astype(np.float32), cam.R)[2:] for cam in cameras]
+    med_w, med_h = float(np.median([s[0] for s in sides])), float(np.median([s[1] for s in sides]))
+    r = MAX_WARP_SIDE_RATIO
+    keep = [i for i, (w, h) in enumerate(sides)
+            if 1 / r <= w / med_w <= r and 1 / r <= h / med_h <= r
+            and max(w, h) / seam_scale < REMAP_MAX_PX]
+    if len(keep) < len(cameras):
+        bad = [indices[i] for i in range(len(cameras)) if i not in keep]
+        print(f"[stitch_horizontal] WARNING: dropped {len(bad)} frame(s) with degenerate camera "
+              f"estimates (warped side outside 1/{r}-{r}x row median or over {REMAP_MAX_PX}px): "
+              f"{[str(image_paths[i]) for i in bad]}", file=sys.stderr)
+        dropped = sorted(dropped + bad)
+        indices = [indices[i] for i in keep]
+        imgs_full = [imgs_full[i] for i in keep]
+        cameras = [cameras[i] for i in keep]
+    if not cameras:
+        raise RuntimeError("every frame had a degenerate camera estimate")
 
     # pass 1: warp at seam resolution, find seams there (cheap)
     seam_warper = cv2.PyRotationWarper('affine', warped_image_scale * seam_work_aspect)

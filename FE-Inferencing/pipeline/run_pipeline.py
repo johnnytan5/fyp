@@ -1,12 +1,14 @@
-"""Orchestrator: video -> per-level split -> sample -> detect -> horizontal
-stitch+overlay -> vertical stitch+overlay -> one crack-annotated facade
-image. This is the entry point the Streamlit frontend will call.
+"""Orchestrator: video -> per-level split -> sample -> detect -> facade ->
+CCA crack merge -> one crack-annotated facade image. Facade is built by
+photogrammetry (ortho.py, default) or the old 2D horizontal+vertical
+panorama stitcher (--stitch panorama). This is the entry point the Streamlit frontend will call.
 
 Detections are carried as coordinate data through both stitching stages and
 only rendered (drawn as boxes/masks) once, on the final facade image -- see
 stitch_horizontal.py's module docstring for why (avoids compounding
 distortion from drawing then re-warping an annotated image).
 """
+import pickle
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,8 +17,10 @@ from typing import Any, Literal
 import cv2
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # for infer.py
+from cca import draw_merged, merge_detections_cca  # noqa: E402
 from detect import detect_cracks  # noqa: E402
 from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
+from ortho import build_facade  # noqa: E402
 from sampling import DWELL_MIN_SECONDS, DWELL_VELOCITY_EPS, STEP_M, extract_frames, sample_frames  # noqa: E402
 from srt_levels import Sample, extract_telemetry_srt, parse_telemetry, detect_levels, split_video_into_levels  # noqa: E402
 from stitch_horizontal import draw_detections, stitch_horizontal  # noqa: E402
@@ -37,6 +41,7 @@ class LevelResult:
 class PipelineResult:
     facade: Any = None
     facade_detections: list = field(default_factory=list)
+    merged_cracks: list = field(default_factory=list)  # CCA-deduped: 1 entry per physical crack
     dropped_levels: list = field(default_factory=list)
     per_level: list[LevelResult] = field(default_factory=list)
 
@@ -52,10 +57,13 @@ def run_pipeline(
     conf_threshold: float = CONF_THRESHOLD,
     save_per_level_annotated: bool = True,
     max_levels: int | None = None,
+    srt_path: Path | None = None,
+    stitch: Literal["ortho", "panorama"] = "ortho",
 ) -> PipelineResult:
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    srt_text = extract_telemetry_srt(video_path)
+    # separate .srt for drones without an embedded telemetry track (flightlog_to_srt.py)
+    srt_text = srt_path.read_text() if srt_path else extract_telemetry_srt(video_path)
     samples = parse_telemetry(srt_text)
     levels = detect_levels(samples, top_to_bottom=top_to_bottom)
     if not levels:
@@ -67,6 +75,7 @@ def run_pipeline(
     model = load_sahi_model(conf=conf_threshold)
 
     per_level_results: list[LevelResult] = []
+    all_frames, all_dets = [], []
     for level, level_video in zip(levels, level_video_paths):
         level_samples = [s for s in samples if level.start_s <= s.t <= level.end_s]
         rel_samples = [Sample(s.t - level.start_s, s.h, s.h_speed, s.v_speed) for s in level_samples]
@@ -76,8 +85,24 @@ def run_pipeline(
 
         detections_per_frame = []
         for fp in frame_paths:
+            # cached beside the frame: reruns (tuning CCA/facade) skip the ~5 min/level detection.
+            # ponytail: keyed by frame filename only -- delete the work dir if the model changes
+            cache = fp.with_suffix(".dets.pkl")
+            if cache.exists():
+                detections_per_frame.append(pickle.loads(cache.read_bytes()))
+                continue
             img = cv2.imread(str(fp))
-            detections_per_frame.append(detect_cracks(img, model) if img is not None else [])
+            dets = detect_cracks(img, model) if img is not None else []
+            cache.write_bytes(pickle.dumps(dets))
+            detections_per_frame.append(dets)
+
+        if stitch == "ortho":  # stitched once, across all levels, after the loop
+            all_frames += frame_paths
+            all_dets += detections_per_frame
+            per_level_results.append(LevelResult(level.index, level.height_m, len(frame_paths)))
+            print(f"[run_pipeline] level {level.index} ({level.height_m:.2f}m): {len(frame_paths)} frames, "
+                  f"{sum(map(len, detections_per_frame))} raw detections", file=sys.stderr)
+            continue
 
         stitched = stitch_horizontal(frame_paths, detections_per_frame)
         lvl_result = LevelResult(
@@ -96,7 +121,16 @@ def run_pipeline(
               f"dropped frames {lvl_result.dropped_frames}", file=sys.stderr)
 
     connectable = [lr for lr in per_level_results if lr.panorama is not None]
-    if len(connectable) < 2:
+    if stitch == "ortho":
+        names = [str(fp.relative_to(work_dir)) for fp in all_frames]
+        o = build_facade(work_dir, names, all_dets, work_dir)
+        cv2.imwrite(str(work_dir / "facade_ortho.jpg"), o["image"])
+        result = PipelineResult(facade=o["image"], facade_detections=o["detections"],
+                                per_level=per_level_results)
+        if o["unregistered"]:
+            print(f"[run_pipeline] {len(o['unregistered'])} frame(s) not placed by SfM: "
+                  f"{o['unregistered']}", file=sys.stderr)
+    elif len(connectable) < 2:
         result = PipelineResult(
             facade=connectable[0].panorama if connectable else None,
             facade_detections=connectable[0].detections if connectable else [],
@@ -121,6 +155,12 @@ def run_pipeline(
               f"dropped levels {result.dropped_levels} -> {work_dir / 'facade_annotated.jpg'}",
               file=sys.stderr)
 
+        # tile seams + frame/level overlaps split one crack into many detections; union + CLOSE + CCA re-counts
+        result.merged_cracks, _ = merge_detections_cca(result.facade_detections, result.facade.shape)
+        cv2.imwrite(str(work_dir / "facade_cca.jpg"), draw_merged(result.facade, result.merged_cracks))
+        print(f"[run_pipeline] CCA: {len(result.facade_detections)} detections -> "
+              f"{len(result.merged_cracks)} cracks -> {work_dir / 'facade_cca.jpg'}", file=sys.stderr)
+
     return result
 
 
@@ -132,9 +172,13 @@ def main() -> None:
     parser.add_argument("--sampling-mode", choices=["dynamic", "dwell"], default="dynamic")
     parser.add_argument("--top-to-bottom", action="store_true")
     parser.add_argument("--max-levels", type=int, default=None)
+    parser.add_argument("--srt", type=Path, default=None, help="external telemetry .srt")
+    parser.add_argument("--stitch", choices=["ortho", "panorama"], default="ortho",
+                        help="ortho = COLMAP photogrammetry (default); panorama = old 2D stitcher")
     args = parser.parse_args()
     run_pipeline(args.video, args.work_dir, sampling_mode=args.sampling_mode,
-                 top_to_bottom=args.top_to_bottom, max_levels=args.max_levels)
+                 top_to_bottom=args.top_to_bottom, max_levels=args.max_levels, srt_path=args.srt,
+                 stitch=args.stitch)
 
 
 if __name__ == "__main__":

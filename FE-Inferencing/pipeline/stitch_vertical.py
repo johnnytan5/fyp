@@ -26,6 +26,10 @@ import numpy as np
 
 from stitch_horizontal import stitch_horizontal
 
+# ponytail: tuned on DJI_0649 -- 0.6 adds level 6 cleanly; 0.4 links all 12 levels but
+# tilts/misaligns the upper floors (plain wall = weak matches). Horizontal keeps 1.0.
+VERTICAL_CONF_THRESH = 0.6
+
 
 def _rotate_point_90cw(pt: tuple[float, float], src_h: float) -> tuple[float, float]:
     """(x, y) in an src_h-tall image -> its position after cv2.ROTATE_90_CLOCKWISE."""
@@ -77,7 +81,7 @@ def stitch_vertical(level_panoramas: list[np.ndarray], level_detections: list[li
         rotated_paths.append(p)
         rotated_detections.append(_rotate_detections(dets, _rotate_point_90cw, src_h))
 
-    result = stitch_horizontal(rotated_paths, rotated_detections)
+    result = stitch_horizontal(rotated_paths, rotated_detections, conf_thresh=VERTICAL_CONF_THRESH)
     rotated_pano = result["panorama"]
     src_w = rotated_pano.shape[1]
 

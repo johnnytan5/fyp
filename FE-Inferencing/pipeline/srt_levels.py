@@ -18,7 +18,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-VS_RISE_THRESHOLD = 0.3     # m/s -- V.S above this counts as "rising"
+VS_RISE_THRESHOLD = 0.1     # m/s -- |V.S| above this = between rows. 0.3 missed slow
+                            # Air 2 climbs (0.1-0.35 m/s); 0.1 leaves DJI_0649 levels unchanged
 MIN_LEVEL_SECONDS = 3       # discard flying segments shorter than this (noise)
 MIN_RISE_SECONDS = 1        # discard rise blips shorter than this (noise)
 
@@ -79,7 +80,7 @@ def detect_levels(
     if not samples:
         return []
 
-    labels = ["RISE" if s.v_speed > vs_threshold else "FLY" for s in samples]
+    labels = ["RISE" if abs(s.v_speed) > vs_threshold else "FLY" for s in samples]  # descents too (landing)
 
     segments: list[tuple[str, int, int]] = []  # (label, start_idx, end_idx inclusive)
     seg_start = 0
