@@ -19,6 +19,7 @@ import pipeline.project_store as store  # noqa: E402
 from cca import draw_merged, merge_detections_cca  # noqa: E402
 from detect import detect_cracks  # noqa: E402
 from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
+from ortho import build_facade  # noqa: E402
 from sampling import DWELL_MIN_SECONDS, DWELL_VELOCITY_EPS, STEP_M, extract_frames, sample_frames  # noqa: E402
 from srt_levels import Sample, detect_levels, extract_telemetry_srt, parse_telemetry, split_video_into_levels  # noqa: E402
 from stitch_horizontal import draw_detections, stitch_horizontal  # noqa: E402
@@ -32,7 +33,7 @@ STATE_KEYS = [
     "dwell_min_seconds", "conf_threshold", "levels", "frame_paths_per_level",
     "detections_per_frame", "level_pano_paths", "level_pano_detections",
     "level_dropped_frames", "facade_path", "facade_detections", "dropped_levels",
-    "cca_close_px", "cca_open_px", "cca_merged",
+    "cca_close_px", "cca_open_px", "cca_merged", "stitch_method", "ortho_stats",
 ]
 
 
@@ -213,7 +214,33 @@ with tab4:
     if not st.session_state.get("detections_per_frame"):
         st.info("Complete inference first.")
     else:
-        if st.button("Stitch", key="btn_stitch"):
+        methods = ["ortho", "panorama"]
+        method = st.radio("Method", methods,
+                           index=methods.index(st.session_state.get("stitch_method", "ortho")),
+                           help="ortho: COLMAP 3D reconstruction projected onto the wall plane "
+                                "(straight, complete facade; slower). panorama: legacy 2D "
+                                "homography stitcher (fast, tears on parallax).")
+        if method == "ortho" and st.button("Build facade", key="btn_ortho"):
+            names, all_dets = [], []
+            for lv in st.session_state["levels"]:
+                idx_str = str(lv["index"])
+                for fp, d in zip(st.session_state["frame_paths_per_level"][idx_str],
+                                 st.session_state["detections_per_frame"][idx_str]):
+                    names.append(str(Path(fp).relative_to(work_dir)))
+                    all_dets.append(d)
+            with st.spinner(f"Reconstructing {len(names)} frames in 3D (several minutes)..."):
+                o = build_facade(work_dir, names, all_dets, work_dir)
+            fp = work_dir / "facade_ortho.jpg"
+            cv2.imwrite(str(fp), o["image"])
+            st.session_state.update(
+                stitch_method="ortho", facade_path=str(fp), facade_detections=o["detections"],
+                ortho_stats={**o["stats"], "unregistered": o["unregistered"]},
+                level_pano_paths={}, level_pano_detections={}, level_dropped_frames={},
+                dropped_levels=[], cca_merged=None)
+            _persist(project_name)
+            st.rerun()
+
+        if method == "panorama" and st.button("Stitch", key="btn_stitch"):
             level_pano_paths, level_pano_detections, level_dropped_frames = {}, {}, {}
             panoramas_ordered, detections_ordered = [], []
             with st.spinner("Stitching each level horizontally..."):
@@ -248,10 +275,23 @@ with tab4:
             st.session_state["facade_path"] = facade_path
             st.session_state["facade_detections"] = facade_detections
             st.session_state["dropped_levels"] = dropped_levels
+            st.session_state["stitch_method"] = "panorama"
+            st.session_state["cca_merged"] = None
             _persist(project_name)
             st.rerun()
 
-        if st.session_state.get("facade_path"):
+        if st.session_state.get("facade_path") and st.session_state.get("stitch_method") == "ortho":
+            stats = st.session_state.get("ortho_stats") or {}
+            st.success(f"{stats.get('registered')}/{stats.get('total')} frames placed in 3D · "
+                       f"{stats.get('points3D')} points · reprojection error "
+                       f"{stats.get('reproj_err_px', 0):.2f}px · facade "
+                       f"{stats.get('facade_px', ('?', '?'))[0]}x{stats.get('facade_px', ('?', '?'))[1]}px")
+            if stats.get("unregistered"):
+                st.warning(f"{len(stats['unregistered'])} frame(s) not placed: {stats['unregistered']}")
+            facade_img = cv2.imread(st.session_state["facade_path"])
+            facade_annotated = draw_detections(facade_img, st.session_state["facade_detections"])
+            st.image(cv2.cvtColor(facade_annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
+        elif st.session_state.get("facade_path"):
             st.subheader("Per-level panoramas")
             level_choice = st.selectbox("View level", [lv["index"] for lv in st.session_state["levels"]],
                                          key="stitch_view_level")

@@ -17,8 +17,8 @@ Each facade pixel takes its colour from the frame whose optical axis hits the
 wall nearest that pixel (most head-on view, least parallax; no blending, so
 crack texture stays sharp). Crack detections run on the original frames and
 are mapped with the same H_i^-1, so they land exactly on the wall. A
-detection is kept only if it falls in its own frame's cell, which stops one
-crack seen in four overlapping frames from counting four times.
+detection is kept if it lands on filmed wall; copies of one crack seen in
+overlapping frames are merged afterwards by CCA (cca.py).
 
 Rebuilt from the "J17 Facade Photogrammetry" write-up (18 Oct 2026).
 """
@@ -82,14 +82,16 @@ def _sfm_child(image_root: Path, names_file: Path, work_dir: Path) -> None:
 def reconstruct(image_root: Path, image_names: list[str], work_dir: Path) -> dict:
     """COLMAP in a child process: torch (detection) and pycolmap each bundle
     libomp, and macOS aborts ("OMP: Error #15") when both load in one process.
-    Cached as work_dir/model.npz -- delete it to force a fresh reconstruction."""
+    Cached as work_dir/model.npz, reused only for the same frame list."""
     import subprocess
 
     work_dir.mkdir(parents=True, exist_ok=True)
     npz = work_dir / "model.npz"
-    if not npz.exists():
-        names_file = work_dir / "images.txt"
-        names_file.write_text("\n".join(image_names))
+    names_file = work_dir / "images.txt"
+    names_txt = "\n".join(image_names)
+    if not npz.exists() or not names_file.exists() or names_file.read_text() != names_txt:
+        npz.unlink(missing_ok=True)
+        names_file.write_text(names_txt)
         subprocess.run([sys.executable, __file__, "--sfm", str(image_root), str(names_file), str(work_dir)],
                        check=True)
     m = dict(np.load(npz))
