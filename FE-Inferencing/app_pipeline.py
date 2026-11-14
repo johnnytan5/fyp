@@ -23,6 +23,20 @@ from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
 from ortho import build_facade  # noqa: E402
 from quantify import WALL_DISTANCE_M, quantify_cracks, scale_from_geom  # noqa: E402
 from report import write_report  # noqa: E402
+
+
+def _local_path(raw: str) -> Path | None:
+    """A path typed or pasted by the user: strips quotes and the backslash-escapes a
+    Finder/terminal drag adds ("FYP\\ Drone\\ Footage")."""
+    raw = raw.strip().strip("'\"").replace("\\ ", " ")
+    return Path(raw).expanduser() if raw else None
+
+
+def _telemetry_text() -> str:
+    """Telemetry for the loaded video: separate .srt if given (drones without an embedded
+    track, see flightlog_to_srt.py), else the video's own subtitle track."""
+    srt = st.session_state.get("srt_path")
+    return Path(srt).read_text() if srt else extract_telemetry_srt(Path(st.session_state["video_path"]))
 from sampling import DWELL_MIN_SECONDS, DWELL_VELOCITY_EPS, STEP_M, extract_frames, sample_frames  # noqa: E402
 from srt_levels import Sample, detect_levels, extract_telemetry_srt, parse_telemetry, split_video_into_levels  # noqa: E402
 from stitch_horizontal import draw_detections, stitch_horizontal  # noqa: E402
@@ -37,7 +51,7 @@ STATE_KEYS = [
     "detections_per_frame", "level_pano_paths", "level_pano_detections",
     "level_dropped_frames", "facade_path", "facade_detections", "dropped_levels",
     "cca_close_px", "cca_open_px", "cca_merged", "stitch_method", "ortho_stats",
-    "facade_offwall", "cca_offwall", "wall_distance_m", "mm_scale", "crack_table", "frame_heights", "report_paths",
+    "facade_offwall", "cca_offwall", "wall_distance_m", "mm_scale", "crack_table", "frame_heights", "report_paths", "srt_path", "report_summary",
 ]
 
 
@@ -93,20 +107,41 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 
 # ---------- Tab 1: Level split ----------
 with tab1:
-    st.header("Split video into levels")
-    uploaded = st.file_uploader("Upload drone video (.mp4)", type=["mp4", "mov"])
+    st.header("Load drone footage and split into levels")
+    # read in place from local disk: 4K footage is 1-2 GB, too big to upload through the browser
+    video_in = st.text_input("Drone video file on this computer (.mp4 / .mov)",
+                             value=st.session_state.get("video_path", ""),
+                             placeholder="/Users/you/Desktop/DJI_0649.MP4  (tip: drag the file into this box)")
+    srt_in = st.text_input("Telemetry .srt (optional: only if the video has no embedded telemetry)",
+                           value=st.session_state.get("srt_path") or "")
     top_to_bottom = st.checkbox("Flight order: top to bottom",
                                  value=st.session_state.get("top_to_bottom", False))
+    video_path, srt_path = _local_path(video_in), _local_path(srt_in)
+    problem = None
+    if video_path and not video_path.is_file():
+        problem = f"Video not found: {video_path}"
+    elif video_path and video_path.suffix.lower() not in (".mp4", ".mov"):
+        problem = "Video must be .mp4 or .mov"
+    elif srt_path and not srt_path.is_file():
+        problem = f"Telemetry file not found: {srt_path}"
+    if problem:
+        st.error(problem)
+    elif video_path:
+        st.caption(f"{video_path.name}: {video_path.stat().st_size / 1e9:.2f} GB, read in place (not copied)")
 
-    if uploaded and st.button("Split into levels", key="btn_split"):
-        video_path = work_dir / "input_video.mp4"
-        video_path.write_bytes(uploaded.getvalue())
+    if video_path and not problem and st.button("Split into levels", key="btn_split"):
+        st.session_state["video_path"] = str(video_path)
+        st.session_state["srt_path"] = str(srt_path) if srt_path else None
         with st.spinner("Parsing telemetry and splitting..."):
-            srt_text = extract_telemetry_srt(video_path)
+            try:
+                srt_text = _telemetry_text()
+            except RuntimeError:
+                st.error("This video has no embedded telemetry track. Convert the flight log with "
+                         "pipeline/flightlog_to_srt.py and give the .srt path above.")
+                st.stop()
             samples = parse_telemetry(srt_text)
             levels_obj = detect_levels(samples, top_to_bottom=top_to_bottom)
             level_video_paths = split_video_into_levels(video_path, levels_obj, work_dir / "levels")
-        st.session_state["video_path"] = str(video_path)
         st.session_state["top_to_bottom"] = top_to_bottom
         st.session_state["levels"] = [
             {"index": lv.index, "start_s": lv.start_s, "end_s": lv.end_s, "height_m": lv.height_m,
@@ -145,7 +180,7 @@ with tab2:
             step_m = st.session_state.get("step_m", STEP_M)
 
         if st.button("Sample frames", key="btn_sample"):
-            srt_text = extract_telemetry_srt(Path(st.session_state["video_path"]))
+            srt_text = _telemetry_text()
             samples = parse_telemetry(srt_text)
             frame_paths_per_level, frame_heights = {}, {}
             with st.spinner("Extracting frames..."):
@@ -377,7 +412,9 @@ with tab5:
                                    s2, title=f"Facade crack report: {project_name}")
                 st.session_state["wall_distance_m"] = dist_m
                 st.session_state["crack_table"] = out["table"]
-                st.session_state["report_paths"] = {k: str(out[k]) for k in ("html", "csv", "labelled")}
+                st.session_state["report_paths"] = {k: str(out[k]) for k in ("html", "csv", "labelled", "pdf")
+                                                    if out[k] is not None}
+                st.session_state["report_summary"] = out["summary"]
             _persist(project_name)
             st.rerun()
 
@@ -390,12 +427,34 @@ with tab5:
 
             paths = st.session_state.get("report_paths")
             if paths and st.session_state.get("crack_table") and Path(paths["labelled"]).exists():
-                c1, c2, c3 = st.columns(3)
-                c1.download_button("⬇ Report (HTML, printable)", Path(paths["html"]).read_bytes(),
-                                   "crack_report.html", "text/html")
-                c2.download_button("⬇ Crack table (CSV)", Path(paths["csv"]).read_bytes(), "cracks.csv", "text/csv")
-                c3.download_button("⬇ Labelled facade (JPG)", Path(paths["labelled"]).read_bytes(),
-                                   "facade_labelled.jpg", "image/jpeg")
+                sm, sc = st.session_state.get("report_summary") or {}, st.session_state["mm_scale"]
+                st.subheader("Defect summary")
+                m = st.columns(5)
+                m[0].metric("On-wall cracks", sm.get("wall", len(wall)),
+                            help=f"{sm.get('verify', 0)} marked “verify” (wider than 25 mm: likely pipe/joint/edge)")
+                m[1].metric("Off-wall, to review", sm.get("offwall", len(offwall)))
+                m[2].metric("Total on-wall length", f"{sm.get('total_length_m', 0):.1f} m", help="excludes “verify”")
+                m[3].metric("Longest on-wall", f"{sm.get('longest_m', 0):.2f} m", help="excludes “verify”")
+                m[4].metric("Distance to wall", f"{st.session_state['wall_distance_m']:.2f} m",
+                            "measured" if sc.get("source") == "telemetry" and
+                            abs(st.session_state["wall_distance_m"] - round(sc["wall_distance_m"], 2)) < 1e-6
+                            else "assumed / override", delta_color="off")
+                if sm.get("by_category"):
+                    st.caption("On-wall cracks by severity (BRE Digest 251; “≤” = width below camera resolution, "
+                               "so the category is an upper bound)")
+                    st.dataframe(pd.DataFrame([sm["by_category"]]), hide_index=True)
+
+                c = st.columns(4)
+                if "pdf" in paths:
+                    c[0].download_button("⬇ Inspection report (PDF)", Path(paths["pdf"]).read_bytes(),
+                                         "crack_report.pdf", "application/pdf", type="primary")
+                else:
+                    c[0].warning("PDF unavailable: install WeasyPrint (+ `brew install pango` on macOS)")
+                c[1].download_button("⬇ Report (HTML)", Path(paths["html"]).read_bytes(),
+                                     "crack_report.html", "text/html")
+                c[2].download_button("⬇ Crack table (CSV)", Path(paths["csv"]).read_bytes(), "cracks.csv", "text/csv")
+                c[3].download_button("⬇ Labelled facade (JPG)", Path(paths["labelled"]).read_bytes(),
+                                     "facade_labelled.jpg", "image/jpeg")
                 st.image(str(paths["labelled"]), use_container_width=True,
                          caption="Numbers match the table. Colour = BRE severity; purple = off-wall (review).")
                 st.caption("Widths “< x” are below the camera's 2-pixel resolution (true width is smaller; BRE "

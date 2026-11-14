@@ -1,6 +1,10 @@
 """End-user crack report: a labelled facade image + a table mapping each label
-to its dimensions, bundled as one self-contained HTML file (opens in any
-browser, prints to PDF) plus the same table as CSV.
+to its dimensions, as a PDF inspection report (A4 landscape, page numbers),
+the same content as one self-contained HTML file, and the table as CSV.
+
+PDF: WeasyPrint renders the HTML, so the two never drift apart. It needs
+Pango (macOS: `brew install pango`); without it the PDF is skipped with a
+warning and HTML/CSV are still written.
 
 Crack #N is the same crack in the image, the table and the CSV: all three
 use quantify.review_order (on-wall first, widest first). Outline colour =
@@ -12,6 +16,7 @@ labels of hundreds of cracks are too small to find by eye.
 import base64
 import csv
 import html
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -19,7 +24,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from quantify import crack_table, review_order, scale_note
+from quantify import IMPLAUSIBLE_WIDTH_MM, crack_table, review_order, scale_note
 
 # BGR outline colours by BRE category (on-wall); off-wall separate
 SEVERITY_BGR = {0: (60, 170, 60), 1: (60, 170, 60), 2: (0, 200, 240), 3: (0, 128, 255), 4: (40, 40, 230),
@@ -69,6 +74,37 @@ def _hex(bgr) -> str:
     return "#%02x%02x%02x" % (bgr[2], bgr[1], bgr[0])
 
 
+def summary(found: list) -> dict:
+    """Headline numbers shared by the HTML/PDF report and the wizard screen.
+    Longest/total length leave out "verify" rows (pipes/joints would inflate them)."""
+    wall = [r for _, r, loc in found if loc == "wall"]
+    plausible = [r for r in wall if not r["max_width_mm"] > IMPLAUSIBLE_WIDTH_MM]
+    by_cat: dict = {}
+    for r in wall:
+        key = (f"BRE {r['bre_category']}" if r["width_resolved"]
+               else f"BRE ≤{r['bre_category']}" if r["n_views"] else "no width")
+        by_cat[key] = by_cat.get(key, 0) + 1
+    return {"wall": len(wall), "offwall": len(found) - len(wall), "verify": len(wall) - len(plausible),
+            "longest_m": max((r["length_mm"] for r in plausible), default=0.0) / 1000,
+            "total_length_m": sum(r["length_mm"] for r in plausible) / 1000,
+            "by_category": dict(sorted(by_cat.items(), key=lambda kv: (kv[0].replace("≤", ""), kv[0])))}
+
+
+def write_pdf(html_path: Path, pdf_path: Path) -> Path | None:
+    """HTML -> PDF with WeasyPrint. None (with a warning) if its system libraries are missing."""
+    if sys.platform == "darwin" and Path("/opt/homebrew/lib").exists():  # Homebrew's Pango isn't on dyld's path
+        os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = ":".join(
+            p for p in ("/opt/homebrew/lib", os.environ.get("DYLD_FALLBACK_LIBRARY_PATH")) if p)
+    try:
+        from weasyprint import HTML
+    except (ImportError, OSError) as e:
+        print(f"[report] PDF skipped ({e.__class__.__name__}): pip install weasyprint; macOS: brew install pango",
+              file=sys.stderr)
+        return None
+    HTML(filename=str(html_path)).write_pdf(str(pdf_path))
+    return pdf_path
+
+
 def write_report(out_dir: Path, image: np.ndarray, found: list, scale: dict,
                  title: str = "Facade crack report") -> dict:
     """Writes cracks.csv, facade_labelled.jpg, report.html into out_dir. Returns their paths + the table."""
@@ -88,13 +124,7 @@ def write_report(out_dir: Path, image: np.ndarray, found: list, scale: dict,
     small = cv2.resize(labelled, None, fx=REPORT_IMG_W / labelled.shape[1], fy=REPORT_IMG_W / labelled.shape[1],
                        interpolation=cv2.INTER_AREA) if labelled.shape[1] > REPORT_IMG_W else labelled
 
-    wall = [(c, r) for c, r, loc in ordered if loc == "wall"]
-    n_off = len(ordered) - len(wall)
-    by_cat: dict = {}
-    for _, r in wall:
-        key = r["bre_category"] if r["width_resolved"] else (f"≤{r['bre_category']}" if r["n_views"] else "n/a")
-        by_cat[key] = by_cat.get(key, 0) + 1
-    longest = max((r["length_mm"] for _, r in wall), default=0)
+    sm = summary(found)
 
     rows_html = []
     for (c, r, loc), t in zip(ordered, table):
@@ -115,7 +145,7 @@ def write_report(out_dir: Path, image: np.ndarray, found: list, scale: dict,
                      for k, lbl in [(1, "BRE 0–1 (≤1 mm)"), (2, "BRE 2 (≤5 mm)"), (3, "BRE 3 (≤15 mm)"),
                                     (4, "BRE 4–5 (>15 mm)")])
     legend += f'<span class="key"><span class="sev" style="background:{_hex(OFFWALL_BGR)}"></span>off-wall (review)</span>'
-    cats = " · ".join(f"BRE {k}: {v}" for k, v in sorted(by_cat.items(), key=lambda kv: str(kv[0])))
+    cats = " · ".join(f"{k}: {v}" for k, v in sm["by_category"].items())
 
     page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title>
@@ -131,23 +161,29 @@ th{{position:sticky;top:0;background:#fafafa}} td.r{{text-align:right;font-varia
 td.num{{font-weight:700;font-size:16px}} td img{{display:block;border-radius:4px}}
 .sev{{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}}
 .key{{margin-right:16px;white-space:nowrap}} td.warn{{color:#a15c00;font-size:12px}} .note{{background:#f6f6f6;border-radius:8px;padding:10px 14px}}
-@media print{{th{{position:static}} tr{{break-inside:avoid}} body{{margin:8mm}}}}
+@page{{size:A4 landscape;margin:10mm 10mm 14mm;
+  @bottom-left{{content:"{html.escape(title)}";font:9px system-ui;color:#888}}
+  @bottom-right{{content:"Page " counter(page) " of " counter(pages);font:9px system-ui;color:#888}}}}
+@media print{{body{{margin:0;font-size:11px}} th{{position:static}} tr{{break-inside:avoid}} thead{{display:table-header-group}}
+  h2.facade-h,h2.cracks{{break-before:page}} .facade{{max-height:160mm;width:auto;max-width:100%}}
+  td img{{height:16mm;width:auto}} td{{padding:2px 6px}} td.num{{font-size:13px}}}}
 </style></head><body>
 <h1>{html.escape(title)}</h1>
 <div class="muted">Generated {date.today().isoformat()} · camera {html.escape(scale.get("camera", "DJI Mavic Air 2 (FC3170)"))}</div>
 <div class="cards">
-<div class="card">On-wall cracks<b>{len(wall)}</b></div>
-<div class="card">Off-wall, to review<b>{n_off}</b></div>
-<div class="card">Longest on-wall<b>{longest / 1000:.2f} m</b></div>
+<div class="card">On-wall cracks<b>{sm["wall"]}</b>{sm["verify"]} marked “verify”</div>
+<div class="card">Off-wall, to review<b>{sm["offwall"]}</b></div>
+<div class="card">Total on-wall length<b>{sm["total_length_m"]:.1f} m</b>excl. “verify”</div>
+<div class="card">Longest on-wall<b>{sm["longest_m"]:.2f} m</b>excl. “verify”</div>
 <div class="card">Distance to wall<b>{scale["wall_distance_m"]:.2f} m</b>{"measured" if scale.get("fit") else "assumed"}</div>
 </div>
 <p class="note">{html.escape(scale_note(scale))} Severity by width: {html.escape(cats)}.</p>
 
-<h2>Facade</h2>
+<h2 class="facade-h">Facade</h2>
 <p>{legend}</p>
 <img class="facade" src="data:image/jpeg;base64,{_b64(small, 82)}" alt="Facade with numbered cracks">
 
-<h2>Cracks</h2>
+<h2 class="cracks">Cracks</h2>
 <p class="muted">Numbers match the labels on the facade. Sorted on-wall first, plausible widths before
 “verify” rows, then by confidence (most likely real first), then widest first. Rows marked “verify” are wider than 25 mm, which on a facade is
 usually a pipe, joint or edge rather than a crack; they are kept for review, not presented as confirmed.
@@ -167,7 +203,9 @@ Scale: {html.escape(scale_note(scale))} Severity: BRE Digest 251. Widths are upp
 </body></html>"""
     html_path = out_dir / "report.html"
     html_path.write_text(page, encoding="utf-8")
-    return {"table": table, "csv": csv_path, "labelled": img_path, "html": html_path}
+    pdf_path = write_pdf(html_path, out_dir / "report.pdf")
+    return {"table": table, "csv": csv_path, "labelled": img_path, "html": html_path, "pdf": pdf_path,
+            "summary": sm}
 
 
 def _self_check() -> None:
@@ -186,6 +224,11 @@ def _self_check() -> None:
         assert out["table"][0]["max width (mm)"] == "9.0" and out["table"][2]["location"] == "off-wall", out["table"]
         page = out["html"].read_text()
         assert page.count("<tr>") == 3 + 1 and "ASSUMED" in page
+        sm = out["summary"]
+        assert (sm["wall"], sm["offwall"], sm["verify"]) == (2, 1, 0) and abs(sm["total_length_m"] - 0.2) < 1e-9
+        assert sm["by_category"] == {"BRE 2": 1, "BRE 3": 1}, sm["by_category"]
+        if out["pdf"] is not None:
+            assert out["pdf"].read_bytes()[:5] == b"%PDF-", "not a PDF"
         lab = cv2.imread(str(out["labelled"]))
         assert np.abs(lab[200, 330].astype(int) - SEVERITY_BGR[3]).sum() < 60, "crack #1 outline colour"
     print("[report] self-check OK", file=sys.stderr)

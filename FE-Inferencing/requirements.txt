@@ -8,3 +8,4 @@ numpy>=1.24.0
 huggingface-hub>=0.23.0
 pycolmap>=4.2
 scikit-image>=0.24
+weasyprint>=62  # PDF report; macOS also needs: brew install pango
