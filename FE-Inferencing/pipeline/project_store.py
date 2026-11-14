@@ -44,6 +44,8 @@ def _serialize_detections(detections: list[dict]) -> list[dict]:
             item["mask"] = item["mask"].tolist()
         if item.get("contour") is not None:
             item["contour"] = item["contour"].tolist()
+        if item.get("src_mask") is not None:
+            item["src_mask"] = np.asarray(item["src_mask"]).tolist()
         out.append(item)
     return out
 
@@ -56,6 +58,8 @@ def _deserialize_detections(detections: list[dict]) -> list[dict]:
             item["mask"] = np.array(item["mask"], dtype=np.float32)
         if item.get("contour") is not None:
             item["contour"] = np.array(item["contour"], dtype=np.float32)
+        if item.get("src_mask") is not None:
+            item["src_mask"] = np.array(item["src_mask"], dtype=np.float32)
         out.append(item)
     return out
 
@@ -65,7 +69,7 @@ def _deserialize_detections(detections: list[dict]) -> list[dict]:
 # serialize_state/deserialize_state below for how each is walked.
 _PER_LEVEL_DETECTION_KEYS = ["level_pano_detections"]                    # {level_index: [dets]}
 _PER_LEVEL_PER_FRAME_DETECTION_KEYS = ["detections_per_frame"]           # {level_index: [[dets], [dets], ...]}
-_FLAT_DETECTION_LIST_KEYS = ["facade_detections", "cca_merged"]         # [dets]
+_FLAT_DETECTION_LIST_KEYS = ["facade_detections", "cca_merged", "facade_offwall", "cca_offwall"]  # [dets]
 
 
 def serialize_state(state: dict[str, Any]) -> str:

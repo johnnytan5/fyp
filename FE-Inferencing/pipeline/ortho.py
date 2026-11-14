@@ -20,6 +20,15 @@ are mapped with the same H_i^-1, so they land exactly on the wall. A
 detection is kept if it lands on filmed wall; copies of one crack seen in
 overlapping frames are merged afterwards by CCA (cca.py).
 
+Off-wall rejection: real facade cracks lie on the wall plane; most false
+positives (aircon units, window hoods, canopy, steps/ground) stick out of it.
+The SfM points already say how far every textured spot is from the plane, so
+a detection is flagged "off-wall" (kept, reviewed separately -- hood/step
+cracks are real defects, so dropping them would cost recall) when its nearest
+3D points are clearly off-plane.
+Thin things hugging the wall (drainpipes) are within the plane's noise band
+and are NOT caught by this.
+
 Rebuilt from the "J17 Facade Photogrammetry" write-up (18 Oct 2026).
 """
 import shutil
@@ -35,6 +44,10 @@ MAX_FEATURES = 8192
 MAX_FACADE_PX = 6000     # ponytail: output size cap; raise for full native detail (memory cost)
 PLANE_ITERS = 3000
 PLANE_THR_FRAC = 0.01    # inlier band = 1% of the cloud's median spread (model has no units)
+OFFPLANE_PCT = 3.0       # flag a detection whose nearby 3D points sit >3% of camera-wall distance
+                         # off the wall (aircon, ledges, canopy, ground). Same result anywhere 2-5% on J17.
+OFFPLANE_K = 8           # nearest 3D points judged per detection
+OFFPLANE_R_FRAC = 0.04   # ...within 4% of facade width; fewer than 5 found = no evidence, keep
 
 
 def _sfm_child(image_root: Path, names_file: Path, work_dir: Path) -> None:
@@ -145,8 +158,11 @@ def plane_to_camera(R: np.ndarray, t: np.ndarray, centroid, right, up, u0, v1, r
 
 
 def build_facade(image_root: Path, image_names: list[str], detections: list[list[dict]],
-                 work_dir: Path, max_facade_px: int = MAX_FACADE_PX) -> dict:
-    """Returns {"image", "detections" (facade coords), "registered", "unregistered", "stats"}."""
+                 work_dir: Path, max_facade_px: int = MAX_FACADE_PX,
+                 offplane_pct: float | None = OFFPLANE_PCT) -> dict:
+    """Returns {"image", "detections" (facade coords, on the wall), "offwall"
+    (flagged off the wall plane), "unregistered", "stats", "views", "geom"}.
+    offplane_pct=None puts everything in "detections"."""
     m = reconstruct(image_root, image_names, work_dir / "sfm")
 
     pts = m["xyz"]
@@ -218,6 +234,8 @@ def build_facade(image_root: Path, image_names: list[str], detections: list[list
     for k, name, K, dist, Hinv in per_img:
         for det in detections[name_to_idx[name]]:
             fd = _project_detection(det, K, dist, Hinv)
+            fd["frame"] = name
+            fd["src_mask"] = det.get("mask")  # frame-pixel polygon: crack width is measured here (quantify.py)
             cx, cy = (np.asarray(fd["bbox"][:2]) + np.asarray(fd["bbox"][2:])) / 2
             xi, yi = int(cx), int(cy)
             # keep anything landing on filmed wall. Copies of one crack from overlapping
@@ -227,17 +245,45 @@ def build_facade(image_root: Path, image_names: list[str], detections: list[list
             if 0 <= xi < W and 0 <= yi < H and owner[yi, xi] >= 0:
                 facade_dets.append(fd)
 
+    rel = pts - centroid
+    dev_pct = np.abs(rel @ n) / dist_wall * 100
+    ppx, ppy = (rel @ right - u0) / res, (v1 - rel @ up) / res
+    offwall = []
+    if offplane_pct is not None:
+        wall = []
+        for fd in facade_dets:
+            fd["plane_dev_pct"] = plane_deviation(fd["bbox"], ppx, ppy, dev_pct, OFFPLANE_R_FRAC * W)
+            (offwall if fd["plane_dev_pct"] > offplane_pct else wall).append(fd)  # nan > x is False: wall
+        facade_dets = wall
+
     registered = set(m["names"])
     stats = {
         "registered": len(registered), "total": len(image_names),
         "points3D": len(pts), "reproj_err_px": float(m["reproj_err"]),
-        "plane_inliers": int(inl.sum()), "facade_px": (W, H),
+        "plane_inliers": int(inl.sum()), "facade_px": (W, H), "offwall_flagged": len(offwall),
     }
     print(f"[ortho] wall plane {inl.sum()}/{len(pts)} points; facade {W}x{H}px; "
-          f"{len(facade_dets)}/{sum(len(d) for d in detections)} detections kept "
-          f"(on filmed wall)", file=sys.stderr)
-    return {"image": canvas, "detections": facade_dets, "stats": stats,
+          f"{len(facade_dets)} on-wall + {len(offwall)} flagged off-wall of "
+          f"{sum(len(d) for d in detections)} detections", file=sys.stderr)
+    return {"image": canvas, "detections": facade_dets, "offwall": offwall, "stats": stats,
+            "views": [(name, K, dist, Hinv) for _, name, K, dist, Hinv in per_img],
+            "geom": {"n": n, "centroid": centroid, "right": right, "up": up, "u0": u0, "v1": v1,
+                     "res": res, "dist_wall": dist_wall, "xyz": pts,
+                     "frame_dist": {nm: float((c - centroid) @ n) for nm, c in zip(m["names"], centers)},
+                     "frame_up": {nm: float((c - centroid) @ up) for nm, c in zip(m["names"], centers)},
+                     "frame_f_px": {nm: float(K[0, 0]) for nm, K in zip(m["names"], m["K"])}},
             "unregistered": [nm for nm in image_names if nm not in registered]}
+
+
+def plane_deviation(bbox, px: np.ndarray, py: np.ndarray, dev: np.ndarray, radius: float,
+                    k: int = OFFPLANE_K, min_pts: int = 5) -> float:
+    """Median off-plane distance of the k 3D points nearest the bbox (facade px),
+    counting only points within radius; nan if fewer than min_pts (no evidence)."""
+    x1, y1, x2, y2 = bbox
+    dd = np.hypot(np.maximum(np.maximum(x1 - px, px - x2), 0), np.maximum(np.maximum(y1 - py, py - y2), 0))
+    nn = np.argsort(dd)[:k]
+    nn = nn[dd[nn] < radius]
+    return float(np.median(dev[nn])) if len(nn) >= min_pts else float("nan")
 
 
 def _project_detection(det: dict, K: np.ndarray, dist: np.ndarray, Hinv: np.ndarray) -> dict:
@@ -278,6 +324,14 @@ def _self_check() -> None:
     p = K @ (R @ X + t)
     q = Hm @ np.array([x, y, 1.0])
     assert np.allclose(p[:2] / p[2], q[:2] / q[2], atol=1e-6), "facade homography"
+
+    # off-plane: wall points at dev 0.2, an aircon-like cluster at dev 20 around (500, 500)
+    px = np.r_[rng.uniform(0, 1000, 400), rng.uniform(480, 520, 20)]
+    py = np.r_[rng.uniform(0, 1000, 400), rng.uniform(480, 520, 20)]
+    dev = np.r_[np.full(400, 0.2), np.full(20, 20.0)]
+    assert plane_deviation((490, 490, 510, 510), px, py, dev, 40) > OFFPLANE_PCT, "off-plane kept"
+    assert plane_deviation((100, 100, 120, 120), px, py, dev, 200) < OFFPLANE_PCT, "wall rejected"
+    assert np.isnan(plane_deviation((5000, 5000, 5010, 5010), px, py, dev, 40)), "no evidence must be nan"
     print("[ortho] self-check OK", file=sys.stderr)
 
 

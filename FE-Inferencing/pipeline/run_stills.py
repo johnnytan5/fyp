@@ -12,8 +12,9 @@ from pathlib import Path
 import cv2
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # for infer.py
-from detect import detect_cracks  # noqa: E402
+from detect import cache_path, detect_cracks  # noqa: E402
 from cca import draw_merged, merge_detections_cca  # noqa: E402
+from quantify import quantify_and_report  # noqa: E402
 from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
 from ortho import build_facade  # noqa: E402
 from stitch_horizontal import draw_detections, stitch_horizontal  # noqa: E402
@@ -59,7 +60,7 @@ def run_stills(photo_dir: Path, work_dir: Path, conf_threshold: float = CONF_THR
         frame_paths, dets_per_frame = [], []
         for i in idxs:
             out = row_dir / photos[i].name
-            cache = out.with_suffix(".dets.pkl")  # reruns skip detection (same as run_pipeline)
+            cache = cache_path(out, conf_threshold)  # reruns skip detection (same as run_pipeline)
             frame_paths.append(out)
             if out.exists() and cache.exists():
                 dets_per_frame.append(pickle.loads(cache.read_bytes()))
@@ -93,17 +94,24 @@ def run_stills(photo_dir: Path, work_dir: Path, conf_threshold: float = CONF_THR
 
     if stitch == "ortho":
         o = build_facade(work_dir, [str(f.relative_to(work_dir)) for f in all_frames], all_dets, work_dir)
-        facade, dets = o["image"], o["detections"]
+        facade, dets, offwall, geom = o["image"], o["detections"], o["offwall"], o["geom"]
         cv2.imwrite(str(work_dir / "facade_ortho.jpg"), facade)
     else:
         v = stitch_vertical(panos, pano_dets, work_dir / "vertical_rotate_tmp")
-        facade, dets = v["panorama"], v["detections"]
+        facade, dets, offwall, geom = v["panorama"], v["detections"], [], None  # no 3D scale: no mm
         print(f"[run_stills] dropped rows {v['dropped']}", file=sys.stderr)
     cv2.imwrite(str(work_dir / "facade_annotated.jpg"), draw_detections(facade, dets))
-    merged, _ = merge_detections_cca(dets, facade.shape)
-    cv2.imwrite(str(work_dir / "facade_cca.jpg"), draw_merged(facade, merged))
-    print(f"[run_stills] facade: {facade.shape}, CCA: {len(dets)} detections -> {len(merged)} cracks "
-          f"-> {work_dir}", file=sys.stderr)
+    merged, cleaned = merge_detections_cca(dets, facade.shape)
+    off_merged, off_cleaned = merge_detections_cca(offwall, facade.shape)
+    if geom is not None:
+        frame_h = {str((work_dir / f"frames_row{ri}" / photos[i].name).relative_to(work_dir)): heights[i]
+                   for ri, idxs in enumerate(rows) for i in idxs}
+        quantify_and_report(merged, cleaned, dets, off_merged, off_cleaned, offwall, geom, facade, work_dir,
+                            heights=frame_h, title=f"Facade crack report: {photo_dir.name}")
+    vis = draw_merged(draw_merged(facade, merged), off_merged, color=(0, 165, 255))  # orange = off-wall, review
+    cv2.imwrite(str(work_dir / "facade_cca.jpg"), vis)
+    print(f"[run_stills] facade: {facade.shape}, CCA: {len(dets)} detections -> {len(merged)} on-wall "
+          f"cracks (green) + {len(off_merged)} off-wall to review (orange) -> {work_dir}", file=sys.stderr)
 
 
 def _self_check() -> None:

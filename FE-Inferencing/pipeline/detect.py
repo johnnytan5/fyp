@@ -14,6 +14,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from infer import CONF_THRESHOLD, SAHI_OVERLAP, SAHI_SLICE_SIZE, load_sahi_model  # noqa: E402
 
 
+def cache_path(frame: Path, conf: float) -> Path:
+    """Per-frame detection cache, keyed by conf so a threshold change never reuses stale results."""
+    return frame.with_name(f"{frame.stem}.dets_c{conf:.2f}.pkl")
+
+
 def detect_cracks(image: np.ndarray, sahi_model: Any, slice_size: int = SAHI_SLICE_SIZE) -> list[dict]:
     """Run SAHI-sliced inference. Returns a list of detections, each:
     {"bbox": (x1, y1, x2, y2), "mask": Nx2 float array or None, "score": float}

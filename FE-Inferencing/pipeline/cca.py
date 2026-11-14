@@ -85,9 +85,18 @@ def merge_detections_cca(
             "contour": contour.reshape(-1, 2).astype(np.float32),
             "area_px": area,
             "score": score,
+            "label": label,  # index into cv2.connectedComponents(cleaned, connectivity=8); quantify.py uses it
         })
 
     return merged, cleaned
+
+
+TIER_HIGH, TIER_MEDIUM = 0.25, 0.10  # score cut-offs for review priority
+
+
+def tier(score: float) -> str:
+    """Review priority. Nothing is dropped for being low; low just goes last."""
+    return "high" if score >= TIER_HIGH else "medium" if score >= TIER_MEDIUM else "low"
 
 
 def draw_merged(image: np.ndarray, merged: list[dict], color=(0, 255, 0)) -> np.ndarray:
@@ -115,6 +124,7 @@ def _self_check() -> None:
     assert len(merged) == 2, f"expected 2 components (1 merged pair + 1 separate), got {len(merged)}"
     bridged = max(merged, key=lambda d: d["area_px"])
     assert bridged["score"] == 0.8, "bridged component should take the max of its contributing scores"
+    assert [tier(s) for s in (0.3, 0.25, 0.1, 0.06)] == ["high", "high", "medium", "low"], "tiers"
     print("[cca] self-check OK", file=sys.stderr)
 
 

@@ -15,10 +15,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 import cv2
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # for infer.py
 from cca import draw_merged, merge_detections_cca  # noqa: E402
-from detect import detect_cracks  # noqa: E402
+from quantify import quantify_and_report  # noqa: E402
+from detect import cache_path, detect_cracks  # noqa: E402
 from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
 from ortho import build_facade  # noqa: E402
 from sampling import DWELL_MIN_SECONDS, DWELL_VELOCITY_EPS, STEP_M, extract_frames, sample_frames  # noqa: E402
@@ -42,6 +44,10 @@ class PipelineResult:
     facade: Any = None
     facade_detections: list = field(default_factory=list)
     merged_cracks: list = field(default_factory=list)  # CCA-deduped: 1 entry per physical crack
+    offwall_detections: list = field(default_factory=list)  # ortho only: flagged off the wall plane, for review
+    offwall_cracks: list = field(default_factory=list)
+    crack_table: list = field(default_factory=list)  # ortho only: length/width mm + BRE category per crack
+    geom: Any = None
     dropped_levels: list = field(default_factory=list)
     per_level: list[LevelResult] = field(default_factory=list)
 
@@ -75,7 +81,8 @@ def run_pipeline(
     model = load_sahi_model(conf=conf_threshold)
 
     per_level_results: list[LevelResult] = []
-    all_frames, all_dets = [], []
+    all_frames, all_dets, frame_heights = [], [], {}
+    tel_t, tel_h = np.array([s.t for s in samples]), np.array([s.h for s in samples])
     for level, level_video in zip(levels, level_video_paths):
         level_samples = [s for s in samples if level.start_s <= s.t <= level.end_s]
         rel_samples = [Sample(s.t - level.start_s, s.h, s.h_speed, s.v_speed) for s in level_samples]
@@ -86,8 +93,8 @@ def run_pipeline(
         detections_per_frame = []
         for fp in frame_paths:
             # cached beside the frame: reruns (tuning CCA/facade) skip the ~5 min/level detection.
-            # ponytail: keyed by frame filename only -- delete the work dir if the model changes
-            cache = fp.with_suffix(".dets.pkl")
+            # ponytail: keyed by frame + conf -- delete the caches if the model weights change
+            cache = cache_path(fp, conf_threshold)
             if cache.exists():
                 detections_per_frame.append(pickle.loads(cache.read_bytes()))
                 continue
@@ -99,6 +106,9 @@ def run_pipeline(
         if stitch == "ortho":  # stitched once, across all levels, after the loop
             all_frames += frame_paths
             all_dets += detections_per_frame
+            for fp in frame_paths:  # telemetry height per frame -> metric scale (quantify.fit_height_scale)
+                t = float(fp.stem.rsplit("_t", 1)[1])  # extract_frames names frames f<i>_t<seconds>.jpg
+                frame_heights[str(fp.relative_to(work_dir))] = float(np.interp(level.start_s + t, tel_t, tel_h))
             per_level_results.append(LevelResult(level.index, level.height_m, len(frame_paths)))
             print(f"[run_pipeline] level {level.index} ({level.height_m:.2f}m): {len(frame_paths)} frames, "
                   f"{sum(map(len, detections_per_frame))} raw detections", file=sys.stderr)
@@ -126,7 +136,7 @@ def run_pipeline(
         o = build_facade(work_dir, names, all_dets, work_dir)
         cv2.imwrite(str(work_dir / "facade_ortho.jpg"), o["image"])
         result = PipelineResult(facade=o["image"], facade_detections=o["detections"],
-                                per_level=per_level_results)
+                                offwall_detections=o["offwall"], per_level=per_level_results, geom=o["geom"])
         if o["unregistered"]:
             print(f"[run_pipeline] {len(o['unregistered'])} frame(s) not placed by SfM: "
                   f"{o['unregistered']}", file=sys.stderr)
@@ -156,10 +166,19 @@ def run_pipeline(
               file=sys.stderr)
 
         # tile seams + frame/level overlaps split one crack into many detections; union + CLOSE + CCA re-counts
-        result.merged_cracks, _ = merge_detections_cca(result.facade_detections, result.facade.shape)
-        cv2.imwrite(str(work_dir / "facade_cca.jpg"), draw_merged(result.facade, result.merged_cracks))
+        result.merged_cracks, cleaned = merge_detections_cca(result.facade_detections, result.facade.shape)
+        result.offwall_cracks, off_cleaned = merge_detections_cca(result.offwall_detections, result.facade.shape)
+        if result.geom is not None:
+            result.crack_table = quantify_and_report(
+                result.merged_cracks, cleaned, result.facade_detections,
+                result.offwall_cracks, off_cleaned, result.offwall_detections, result.geom, result.facade,
+                work_dir, heights=frame_heights, title=f"Facade crack report: {video_path.name}")["table"]
+        vis = draw_merged(result.facade, result.merged_cracks)
+        vis = draw_merged(vis, result.offwall_cracks, color=(0, 165, 255))  # orange = off-wall, review
+        cv2.imwrite(str(work_dir / "facade_cca.jpg"), vis)
         print(f"[run_pipeline] CCA: {len(result.facade_detections)} detections -> "
-              f"{len(result.merged_cracks)} cracks -> {work_dir / 'facade_cca.jpg'}", file=sys.stderr)
+              f"{len(result.merged_cracks)} on-wall cracks (green) + {len(result.offwall_cracks)} "
+              f"off-wall to review (orange) -> {work_dir / 'facade_cca.jpg'}", file=sys.stderr)
 
     return result
 

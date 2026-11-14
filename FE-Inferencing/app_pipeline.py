@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -16,10 +17,12 @@ sys.path.insert(0, str(Path(__file__).parent / "pipeline"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import pipeline.project_store as store  # noqa: E402
-from cca import draw_merged, merge_detections_cca  # noqa: E402
+from cca import draw_merged, merge_detections_cca, tier  # noqa: E402
 from detect import detect_cracks  # noqa: E402
 from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
 from ortho import build_facade  # noqa: E402
+from quantify import WALL_DISTANCE_M, quantify_cracks, scale_from_geom  # noqa: E402
+from report import write_report  # noqa: E402
 from sampling import DWELL_MIN_SECONDS, DWELL_VELOCITY_EPS, STEP_M, extract_frames, sample_frames  # noqa: E402
 from srt_levels import Sample, detect_levels, extract_telemetry_srt, parse_telemetry, split_video_into_levels  # noqa: E402
 from stitch_horizontal import draw_detections, stitch_horizontal  # noqa: E402
@@ -34,6 +37,7 @@ STATE_KEYS = [
     "detections_per_frame", "level_pano_paths", "level_pano_detections",
     "level_dropped_frames", "facade_path", "facade_detections", "dropped_levels",
     "cca_close_px", "cca_open_px", "cca_merged", "stitch_method", "ortho_stats",
+    "facade_offwall", "cca_offwall", "wall_distance_m", "mm_scale", "crack_table", "frame_heights", "report_paths",
 ]
 
 
@@ -143,7 +147,7 @@ with tab2:
         if st.button("Sample frames", key="btn_sample"):
             srt_text = extract_telemetry_srt(Path(st.session_state["video_path"]))
             samples = parse_telemetry(srt_text)
-            frame_paths_per_level = {}
+            frame_paths_per_level, frame_heights = {}, {}
             with st.spinner("Extracting frames..."):
                 for lv in st.session_state["levels"]:
                     level_samples = [s for s in samples if lv["start_s"] <= s.t <= lv["end_s"]]
@@ -154,11 +158,16 @@ with tab2:
                     frame_paths = extract_frames(Path(lv["video_path"]), timestamps,
                                                   work_dir / f"frames_level{lv['index']}")
                     frame_paths_per_level[str(lv["index"])] = [str(p) for p in frame_paths]
+                    for p in frame_paths:  # altimeter height per frame -> metric scale (quantify.py)
+                        t = float(p.stem.rsplit("_t", 1)[1])  # extract_frames names f<i>_t<seconds>.jpg
+                        frame_heights[str(p)] = float(np.interp(t, [s.t for s in rel_samples],
+                                                                [s.h for s in rel_samples]))
             st.session_state["sampling_mode"] = mode
             st.session_state["step_m"] = step_m
             st.session_state["dwell_velocity_eps"] = vel_eps
             st.session_state["dwell_min_seconds"] = min_dwell
             st.session_state["frame_paths_per_level"] = frame_paths_per_level
+            st.session_state["frame_heights"] = frame_heights
             _persist(project_name)
             st.rerun()
 
@@ -230,10 +239,14 @@ with tab4:
                     all_dets.append(d)
             with st.spinner(f"Reconstructing {len(names)} frames in 3D (several minutes)..."):
                 o = build_facade(work_dir, names, all_dets, work_dir)
+            heights = {str(Path(p).relative_to(work_dir)): h
+                       for p, h in (st.session_state.get("frame_heights") or {}).items()}
+            st.session_state["mm_scale"] = scale_from_geom(o["geom"], heights=heights)  # telemetry, else 5 m
             fp = work_dir / "facade_ortho.jpg"
             cv2.imwrite(str(fp), o["image"])
             st.session_state.update(
                 stitch_method="ortho", facade_path=str(fp), facade_detections=o["detections"],
+                facade_offwall=o["offwall"], cca_offwall=None, crack_table=None,
                 ortho_stats={**o["stats"], "unregistered": o["unregistered"]},
                 level_pano_paths={}, level_pano_detections={}, level_dropped_frames={},
                 dropped_levels=[], cca_merged=None)
@@ -277,6 +290,10 @@ with tab4:
             st.session_state["dropped_levels"] = dropped_levels
             st.session_state["stitch_method"] = "panorama"
             st.session_state["cca_merged"] = None
+            st.session_state["facade_offwall"] = []
+            st.session_state["cca_offwall"] = None
+            st.session_state["mm_scale"] = None  # 2D panorama has no 3D scale -> no mm measurement
+            st.session_state["crack_table"] = None
             _persist(project_name)
             st.rerun()
 
@@ -285,11 +302,15 @@ with tab4:
             st.success(f"{stats.get('registered')}/{stats.get('total')} frames placed in 3D · "
                        f"{stats.get('points3D')} points · reprojection error "
                        f"{stats.get('reproj_err_px', 0):.2f}px · facade "
-                       f"{stats.get('facade_px', ('?', '?'))[0]}x{stats.get('facade_px', ('?', '?'))[1]}px")
+                       f"{stats.get('facade_px', ('?', '?'))[0]}x{stats.get('facade_px', ('?', '?'))[1]}px · "
+                       f"{stats.get('offwall_flagged', 0)} detections flagged off-wall "
+                       f"(aircon, ledges, ground; judged by 3D depth; orange, kept for review)")
             if stats.get("unregistered"):
                 st.warning(f"{len(stats['unregistered'])} frame(s) not placed: {stats['unregistered']}")
             facade_img = cv2.imread(st.session_state["facade_path"])
             facade_annotated = draw_detections(facade_img, st.session_state["facade_detections"])
+            facade_annotated = draw_detections(facade_annotated, st.session_state.get("facade_offwall") or [],
+                                               color=(0, 165, 255))
             st.image(cv2.cvtColor(facade_annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
         elif st.session_state.get("facade_path"):
             st.subheader("Per-level panoramas")
@@ -323,26 +344,72 @@ with tab5:
                               3, 51, st.session_state.get("cca_close_px", 15), 2)
         open_px = st.slider("Opening kernel (px) — removes noise specks",
                              1, 21, st.session_state.get("cca_open_px", 3), 2)
+        scale = st.session_state.get("mm_scale")
+        if scale:
+            measured = scale.get("source") == "telemetry"
+            st.caption(f"Drone-to-wall distance {scale['wall_distance_m']:.2f} m "
+                       + ("measured from the drone's altimeter." if measured
+                          else f"ASSUMED (no usable altimeter data, default {WALL_DISTANCE_M} m)."))
+            dist_m = st.number_input("Drone-to-wall distance (m): override only if you measured it on site",
+                                     1.0, 50.0, round(float(scale["wall_distance_m"]), 2), 0.05)
         if st.button("Merge detections", key="btn_cca"):
             facade_img = cv2.imread(st.session_state["facade_path"])
             merged, _cleaned_mask = merge_detections_cca(
                 st.session_state["facade_detections"], facade_img.shape, close_px, open_px)
+            offwall, off_cleaned = merge_detections_cca(
+                st.session_state.get("facade_offwall") or [], facade_img.shape, close_px, open_px)
             st.session_state["cca_close_px"] = close_px
             st.session_state["cca_open_px"] = open_px
             st.session_state["cca_merged"] = merged
+            st.session_state["cca_offwall"] = offwall
+            if scale:
+                s2 = scale
+                if abs(dist_m - round(scale["wall_distance_m"], 2)) > 1e-6:  # user override: scale is linear in it
+                    k = dist_m / scale["wall_distance_m"]
+                    s2 = {"source": "override", "fit": None, "wall_distance_m": dist_m,
+                          "facade_mm_per_px": scale["facade_mm_per_px"] * k,
+                          "frame_mm_per_px": {n: v * k for n, v in scale["frame_mm_per_px"].items()}}
+                wall_rows = quantify_cracks(merged, _cleaned_mask, st.session_state["facade_detections"], s2)
+                off_rows = quantify_cracks(offwall, off_cleaned, st.session_state.get("facade_offwall") or [], s2)
+                out = write_report(work_dir, facade_img,
+                                   [(c, r, "wall") for c, r in zip(merged, wall_rows)]
+                                   + [(c, r, "off-wall") for c, r in zip(offwall, off_rows)],
+                                   s2, title=f"Facade crack report: {project_name}")
+                st.session_state["wall_distance_m"] = dist_m
+                st.session_state["crack_table"] = out["table"]
+                st.session_state["report_paths"] = {k: str(out[k]) for k in ("html", "csv", "labelled")}
             _persist(project_name)
             st.rerun()
 
-        if st.session_state.get("cca_merged"):
-            raw_count = len(st.session_state["facade_detections"])
-            merged_count = len(st.session_state["cca_merged"])
-            st.success(f"{raw_count} raw detections → {merged_count} merged cracks")
+        if st.session_state.get("cca_merged") is not None:
+            wall = st.session_state["cca_merged"]
+            offwall = st.session_state.get("cca_offwall") or []
+            raw_count = len(st.session_state["facade_detections"]) + len(st.session_state.get("facade_offwall") or [])
+            st.success(f"{raw_count} raw detections → {len(wall)} on-wall cracks + "
+                       f"{len(offwall)} off-wall to review")
 
-            facade_img = cv2.imread(st.session_state["facade_path"])
-            annotated = draw_merged(facade_img, st.session_state["cca_merged"])
-            st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
-
-            rows = [{"crack #": i + 1, "score": round(d["score"], 2), "area (px)": d["area_px"],
-                     "bbox": tuple(round(v) for v in d["bbox"])}
-                    for i, d in enumerate(st.session_state["cca_merged"])]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            paths = st.session_state.get("report_paths")
+            if paths and st.session_state.get("crack_table") and Path(paths["labelled"]).exists():
+                c1, c2, c3 = st.columns(3)
+                c1.download_button("⬇ Report (HTML, printable)", Path(paths["html"]).read_bytes(),
+                                   "crack_report.html", "text/html")
+                c2.download_button("⬇ Crack table (CSV)", Path(paths["csv"]).read_bytes(), "cracks.csv", "text/csv")
+                c3.download_button("⬇ Labelled facade (JPG)", Path(paths["labelled"]).read_bytes(),
+                                   "facade_labelled.jpg", "image/jpeg")
+                st.image(str(paths["labelled"]), use_container_width=True,
+                         caption="Numbers match the table. Colour = BRE severity; purple = off-wall (review).")
+                st.caption("Widths “< x” are below the camera's 2-pixel resolution (true width is smaller; BRE "
+                           "category is an upper bound). “verify” = wider than 25 mm, usually a pipe/joint/edge. "
+                           "Sorted on-wall first, plausible before “verify”, then confidence, then width.")
+                st.dataframe(pd.DataFrame(st.session_state["crack_table"]), use_container_width=True,
+                             hide_index=True)
+            else:  # panorama mode: no 3D scale, so no mm -- list by score only
+                facade_img = cv2.imread(st.session_state["facade_path"])
+                annotated = draw_merged(draw_merged(facade_img, wall), offwall, color=(0, 165, 255))
+                st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
+                found = [(d, "wall") for d in wall] + [(d, "off-wall") for d in offwall]
+                found.sort(key=lambda x: (x[1] != "wall", -x[0]["score"]))
+                rows = [{"crack #": i + 1, "location": loc, "tier": tier(d["score"]), "score": round(d["score"], 2),
+                         "area (px)": d["area_px"], "bbox": tuple(round(v) for v in d["bbox"])}
+                        for i, (d, loc) in enumerate(found)]
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)

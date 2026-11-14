@@ -14,7 +14,11 @@ torch.load = lambda f, **kw: _orig_load(f, **{"weights_only": False, **kw})
 SAHI_MODEL_IMGSZ = 640  # net input size; slices smaller than this get upscaled (magnified)
 SAHI_SLICE_SIZE = 512
 SAHI_OVERLAP = 0.2
-CONF_THRESHOLD = 0.25
+# Recall-first: a missed crack costs more than a false alarm. 0.10 is the test-set
+# best-F1 point (Model Training/docs/model_training_ablation_config.md); 0.05 went
+# lower still because J17 facade review found clear branching cracks only above 0.05.
+# Low scores are surfaced as a "low" review tier (cca.tier), not hidden.
+CONF_THRESHOLD = 0.05
 WEIGHTS_PATH = Path(__file__).parent / "weights" / "best.pt"
 
 
