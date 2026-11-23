@@ -72,8 +72,7 @@ def _sfm_child(image_root: Path, names_file: Path, work_dir: Path) -> None:
 
     mo = pycolmap.FeatureMatchingOptions()
     mo.num_threads = NUM_THREADS
-    # ponytail: exhaustive is n^2 pairs (~13k for 164 frames); switch to
-    # match_sequential / vocab tree for surveys of several hundred frames
+
     pycolmap.match_exhaustive(db, matching_options=mo)
 
     recs = pycolmap.incremental_mapping(db, image_root, out)

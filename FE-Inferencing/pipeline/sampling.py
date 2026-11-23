@@ -19,10 +19,9 @@ from pathlib import Path
 
 from srt_levels import Sample
 
-STEP_M = 1.0            # ponytail: tunable -- meters of horizontal travel between dynamic samples
-DWELL_VELOCITY_EPS = 0.15  # ponytail: tunable -- m/s below this counts as "stopped"; calibrate
-                           # once real waypoint-mission footage is available
-DWELL_MIN_SECONDS = 0.5   # ponytail: tunable -- minimum dwell duration to count (filters noise)
+STEP_M = 1.0            # tunable -- meters of horizontal travel between dynamic samples
+DWELL_VELOCITY_EPS = 0.15  # tunable -- m/s below this counts as "stopped"; calibrate once real waypoint-mission footage is available
+DWELL_MIN_SECONDS = 0.5   # tunable -- minimum dwell duration to count (filters noise)
 
 
 def sample_dynamic(level_samples: list[Sample], step_m: float = STEP_M) -> list[float]:

@@ -20,8 +20,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))  # for infer.py
 from cca import draw_merged, merge_detections_cca  # noqa: E402
 from quantify import quantify_and_report  # noqa: E402
-from detect import cache_path, detect_cracks  # noqa: E402
-from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
+from detect import CONF_THRESHOLD, cache_path, detect_cracks, load_detector  # noqa: E402
+
 from ortho import build_facade  # noqa: E402
 from sampling import DWELL_MIN_SECONDS, DWELL_VELOCITY_EPS, STEP_M, extract_frames, sample_frames  # noqa: E402
 from srt_levels import Sample, extract_telemetry_srt, parse_telemetry, detect_levels, split_video_into_levels  # noqa: E402
@@ -78,7 +78,7 @@ def run_pipeline(
         levels = levels[:max_levels]
 
     level_video_paths = split_video_into_levels(video_path, levels, work_dir / "levels")
-    model = load_sahi_model(conf=conf_threshold)
+    model = load_detector(conf=conf_threshold)
 
     per_level_results: list[LevelResult] = []
     all_frames, all_dets, frame_heights = [], [], {}

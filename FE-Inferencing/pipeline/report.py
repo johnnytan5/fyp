@@ -188,7 +188,7 @@ td.num{{font-weight:700;font-size:16px}} td img{{display:block;border-radius:4px
 “verify” rows, then by confidence (most likely real first), then widest first. Rows marked “verify” are wider than 25 mm, which on a facade is
 usually a pipe, joint or edge rather than a crack; they are kept for review, not presented as confirmed.
 Width “&lt; x” means the crack is narrower than the camera can resolve (2 pixels); its true width is
-below x, and its BRE category is an upper bound. Confidence tier: high ≥ 0.25, medium ≥ 0.10, low &lt; 0.10;
+below x, and its BRE category is an upper bound. Confidence tier (mean U-Net crack probability): high ≥ 0.85, medium ≥ 0.65, low &lt; 0.65;
 low-confidence findings are kept on purpose (missing a crack costs more than a false alarm).</p>
 <table><thead><tr><th>#</th><th>Close-up</th><th>Location</th><th>Severity (BRE)</th><th>Length (mm)</th>
 <th>Width (mm)</th><th>Max width (mm)</th><th>Confidence</th><th>Views</th><th>Note</th></tr></thead>
@@ -196,7 +196,7 @@ low-confidence findings are kept on purpose (missing a crack costs more than a f
 
 <h2>Method and limits</h2>
 <p class="muted">Facade: COLMAP structure-from-motion, frames projected onto the fitted wall plane.
-Cracks: SAHI-tiled segmentation at confidence ≥ 0.05, copies merged by connected-component analysis.
+Cracks: U-Net (ResNet34) segmentation on 640 px tiles at probability ≥ 0.5, copies merged by connected-component analysis.
 Length: crack skeleton on the facade. Width: distance transform on each source frame's mask, median over views.
 Scale: {html.escape(scale_note(scale))} Severity: BRE Digest 251. Widths are upper estimates
 (blur and mask edges widen thin cracks); confirm critical cracks on site with a crack-width gauge.</p>

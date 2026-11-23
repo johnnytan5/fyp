@@ -18,8 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pipeline.project_store as store  # noqa: E402
 from cca import draw_merged, merge_detections_cca, tier  # noqa: E402
-from detect import detect_cracks  # noqa: E402
-from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
+from detect import CONF_THRESHOLD, detect_cracks, load_detector  # noqa: E402
 from ortho import build_facade  # noqa: E402
 from quantify import WALL_DISTANCE_M, quantify_cracks, scale_from_geom  # noqa: E402
 from report import write_report  # noqa: E402
@@ -224,9 +223,9 @@ with tab3:
         conf = st.slider("Confidence threshold", 0.05, 0.95,
                           st.session_state.get("conf_threshold", CONF_THRESHOLD), 0.05)
         if st.button("Run inference", key="btn_infer"):
-            model = load_sahi_model(conf=conf)
+            model = load_detector(conf=conf)
             detections_per_frame = {}
-            with st.spinner("Running detection (SAHI-tiled)..."):
+            with st.spinner("Running U-Net crack segmentation (640 px tiles)…"):
                 for level_idx_str, paths in st.session_state["frame_paths_per_level"].items():
                     dets = []
                     for p in paths:
@@ -369,6 +368,10 @@ with tab4:
             if st.session_state.get("dropped_levels"):
                 st.warning(f"Level(s) not connected to the facade: {st.session_state['dropped_levels']}")
 
+        if st.session_state.get("facade_path"):
+            st.download_button("⬇ Stitched facade, no overlay (JPG)",
+                               Path(st.session_state["facade_path"]).read_bytes(), "facade_clean.jpg", "image/jpeg")
+
 # ---------- Tab 5: CCA & findings ----------
 with tab5:
     st.header("Merge overlapping detections (connected-component analysis)")
@@ -444,7 +447,7 @@ with tab5:
                                "so the category is an upper bound)")
                     st.dataframe(pd.DataFrame([sm["by_category"]]), hide_index=True)
 
-                c = st.columns(4)
+                c = st.columns(5)
                 if "pdf" in paths:
                     c[0].download_button("⬇ Inspection report (PDF)", Path(paths["pdf"]).read_bytes(),
                                          "crack_report.pdf", "application/pdf", type="primary")
@@ -455,6 +458,9 @@ with tab5:
                 c[2].download_button("⬇ Crack table (CSV)", Path(paths["csv"]).read_bytes(), "cracks.csv", "text/csv")
                 c[3].download_button("⬇ Labelled facade (JPG)", Path(paths["labelled"]).read_bytes(),
                                      "facade_labelled.jpg", "image/jpeg")
+                c[4].download_button("⬇ Clean facade, no overlay (JPG)",
+                                     Path(st.session_state["facade_path"]).read_bytes(), "facade_clean.jpg",
+                                     "image/jpeg")
                 st.image(str(paths["labelled"]), use_container_width=True,
                          caption="Numbers match the table. Colour = BRE severity; purple = off-wall (review).")
                 st.caption("Widths “< x” are below the camera's 2-pixel resolution (true width is smaller; BRE "

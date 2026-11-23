@@ -12,10 +12,10 @@ from pathlib import Path
 import cv2
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # for infer.py
-from detect import cache_path, detect_cracks  # noqa: E402
+from detect import CONF_THRESHOLD, cache_path, detect_cracks, load_detector  # noqa: E402
 from cca import draw_merged, merge_detections_cca  # noqa: E402
 from quantify import quantify_and_report  # noqa: E402
-from infer import CONF_THRESHOLD, load_sahi_model  # noqa: E402
+
 from ortho import build_facade  # noqa: E402
 from stitch_horizontal import draw_detections, stitch_horizontal  # noqa: E402
 from stitch_vertical import stitch_vertical  # noqa: E402
@@ -50,7 +50,7 @@ def run_stills(photo_dir: Path, work_dir: Path, conf_threshold: float = CONF_THR
     photos = sorted(photo_dir.glob("*.JPG")) + sorted(photo_dir.glob("*.jpg"))
     heights = [relative_altitude(p) for p in photos]
     rows = group_rows(heights)
-    model = load_sahi_model(conf=conf_threshold)
+    model = load_detector(conf=conf_threshold)
 
     panos, pano_dets = [], []
     all_frames, all_dets = [], []

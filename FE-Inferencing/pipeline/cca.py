@@ -91,7 +91,7 @@ def merge_detections_cca(
     return merged, cleaned
 
 
-TIER_HIGH, TIER_MEDIUM = 0.25, 0.10  # score cut-offs for review priority
+TIER_HIGH, TIER_MEDIUM = 0.85, 0.65  # U-Net mean crack probability; components start at CONF_THRESHOLD 0.5
 
 
 def tier(score: float) -> str:
@@ -124,7 +124,7 @@ def _self_check() -> None:
     assert len(merged) == 2, f"expected 2 components (1 merged pair + 1 separate), got {len(merged)}"
     bridged = max(merged, key=lambda d: d["area_px"])
     assert bridged["score"] == 0.8, "bridged component should take the max of its contributing scores"
-    assert [tier(s) for s in (0.3, 0.25, 0.1, 0.06)] == ["high", "high", "medium", "low"], "tiers"
+    assert [tier(s) for s in (0.9, 0.85, 0.7, 0.55)] == ["high", "high", "medium", "low"], "tiers"
     print("[cca] self-check OK", file=sys.stderr)
 
 
